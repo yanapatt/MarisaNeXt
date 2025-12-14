@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# Virtual env
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Kaggle
+kaggle.json
+.kaggle/
