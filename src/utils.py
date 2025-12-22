@@ -11,7 +11,6 @@ import os
 import torch
 import numpy as np
 import random as rd
-from torchmetrics.functional import accuracy, f1_score, precision, recall
 
 # สำหรับ Setting seed environment
 def seed_everything(seed_num=42):
@@ -26,7 +25,7 @@ def seed_everything(seed_num=42):
         torch.backends.cudnn.benchmark=False
         torch.backends.cudnn.deterministic=True
 
-    print(f"Global seed has been set at {seed_num}")
+    print(f'Global seed has been set at {seed_num}')
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
@@ -53,7 +52,7 @@ def save_model(save_path, model, optimizer, epoch, **kwargs):
 
 def load_model(save_path, model, optimizer=None, device='cpu', strict=True):
     if not os.path.exists(save_path):
-        raise FileNotFoundError(f"Checkpoint not found at {save_path}")
+        raise FileNotFoundError(f'Checkpoint not found at {save_path}')
 
     checkpoint = torch.load(save_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
@@ -68,23 +67,3 @@ def load_model(save_path, model, optimizer=None, device='cpu', strict=True):
                     state[key] = value.to(device)
 
     return checkpoint
-
-# สำหรับคำนวณ Metrics ต่าง ๆ
-def perf_metrics(y_pred, y_true, n_classes, task='multiclass', average='macro'):
-    if task == 'multiclass' and y_true.ndim > 1 and y_true.size(1) > 1:
-        y_true = torch.argmax(y_true, dim=1)
-
-    if task == 'binary':
-        if y_pred.ndim == 2 and y_pred.size(1) == 1:
-            y_pred = y_pred.squeeze(dim=1)
-        if y_true.ndim == 2 and y_true.size(1) == 1:
-            y_true = y_true.squeeze(dim=1)
-
-        y_true = y_true.long()
-
-    acc = accuracy(y_pred, y_true, task=task, num_classes=n_classes) # ไม่ต้องใช้ average
-    f1 = f1_score(y_pred, y_true, task=task, num_classes=n_classes, average=average)
-    prec = precision(y_pred, y_true, task=task, num_classes=n_classes, average=average)
-    rec = recall(y_pred, y_true, task=task, num_classes=n_classes, average=average)
-
-    return float(acc), float(f1), float(prec), float(rec)

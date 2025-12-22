@@ -17,7 +17,7 @@ def get_labels(dataloader):
         if isinstance(batch, (list, tuple)):
             labels = batch[1]
         else:
-            raise ValueError("Loader format not supported")
+            raise ValueError('Loader format not supported')
 
         if labels.ndim > 1:
             labels = labels.view(-1)

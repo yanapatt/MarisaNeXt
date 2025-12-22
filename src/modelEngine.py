@@ -9,12 +9,33 @@ Original file is located at
 
 import torch
 from torch.nn.utils import clip_grad_norm_
+from torchmetrics.functional import accuracy, f1_score, precision, recall
 from pkbar import Kbar
 from time import time
 from collections import defaultdict
 
 from .utils import *
 from .callbacks import *
+
+# สำหรับคำนวณ Metrics ต่าง ๆ
+def perf_metrics(y_pred, y_true, n_classes, task='multiclass', average='macro'):
+    if task == 'multiclass' and y_true.ndim > 1 and y_true.size(1) > 1:
+        y_true = torch.argmax(y_true, dim=1)
+
+    if task == 'binary':
+        if y_pred.ndim == 2 and y_pred.size(1) == 1:
+            y_pred = y_pred.squeeze(dim=1)
+        if y_true.ndim == 2 and y_true.size(1) == 1:
+            y_true = y_true.squeeze(dim=1)
+
+        y_true = y_true.long()
+
+    acc = accuracy(y_pred, y_true, task=task, num_classes=n_classes) # ไม่ต้องใช้ average
+    f1 = f1_score(y_pred, y_true, task=task, num_classes=n_classes, average=average)
+    prec = precision(y_pred, y_true, task=task, num_classes=n_classes, average=average)
+    rec = recall(y_pred, y_true, task=task, num_classes=n_classes, average=average)
+
+    return float(acc), float(f1), float(prec), float(rec)
 
 # Training loop
 def train(

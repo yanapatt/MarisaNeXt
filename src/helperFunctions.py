@@ -10,9 +10,10 @@ Original file is located at
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as font_manager
-from PIL import Image
 import itertools
 import pathlib
+from PIL import Image
+
 import numpy as np
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, roc_auc_score
 from sklearn.preprocessing import label_binarize
@@ -22,12 +23,12 @@ def matplotlib_font(font_dir, prefer_name=None):
     font_dir = pathlib.Path(font_dir)
 
     if not font_dir.exists():
-        raise FileNotFoundError(f"Font directory not found: {font_dir}")
+        raise FileNotFoundError(f'Font directory not found: {font_dir}')
 
     font_files = font_manager.findSystemFonts(fontpaths=[str(font_dir)])
 
     if not font_files:
-        raise RuntimeError(f"No font files found in {font_dir}")
+        raise RuntimeError(f'No font files found in {font_dir}')
 
     for font in font_files:
         font_manager.fontManager.addfont(font)
@@ -48,27 +49,27 @@ def matplotlib_font(font_dir, prefer_name=None):
 
 # Plot learning curve
 def plot_lr_curve(history, figsize=(12, 5), fontsize=16, title=None, save_path=None):
-    epochs = range(1, len(history["accuracy"]) + 1)
+    epochs = range(1, len(history['accuracy']) + 1)
     fig = plt.figure(figsize=figsize)
 
     # Loss
     plt.subplot(1, 2, 1)
-    plt.plot(epochs, history["loss"], "b-", label="Training loss")
-    plt.plot(epochs, history["val_loss"], "r-", label="Validation loss")
-    plt.title("Training and validation loss", fontsize=fontsize)
-    plt.xlabel("Epochs", fontsize=fontsize)
-    plt.ylabel("Loss", fontsize=fontsize)
+    plt.plot(epochs, history['loss'], 'b-', label='Training loss')
+    plt.plot(epochs, history['val_loss'], 'r-', label='Validation loss')
+    plt.title('Training and validation loss', fontsize=fontsize)
+    plt.xlabel('Epochs', fontsize=fontsize)
+    plt.ylabel('Loss', fontsize=fontsize)
     plt.legend(fontsize=fontsize-2)
     plt.xticks(fontsize=fontsize-2)
     plt.yticks(fontsize=fontsize-2)
 
     # Accuracy
     plt.subplot(1, 2, 2)
-    plt.plot(epochs, history["accuracy"], "b-", label="Training accuracy")
-    plt.plot(epochs, history["val_accuracy"], "r-", label="Validation accuracy")
-    plt.title("Training and validation accuracy", fontsize=fontsize)
-    plt.xlabel("Epochs", fontsize=fontsize)
-    plt.ylabel("Accuracy", fontsize=fontsize)
+    plt.plot(epochs, history['accuracy'], 'b-', label='Training accuracy')
+    plt.plot(epochs, history['val_accuracy'], 'r-', label='Validation accuracy')
+    plt.title('Training and validation accuracy', fontsize=fontsize)
+    plt.xlabel('Epochs', fontsize=fontsize)
+    plt.ylabel('Accuracy', fontsize=fontsize)
     plt.legend(fontsize=fontsize-2)
     plt.xticks(fontsize=fontsize-2)
     plt.yticks(fontsize=fontsize-2)
@@ -76,11 +77,11 @@ def plot_lr_curve(history, figsize=(12, 5), fontsize=16, title=None, save_path=N
     plt.tight_layout()
 
     if title:
-        fig.text(0.5, 0.01, f"{title}", ha='center', fontsize=fontsize)
+        fig.text(0.5, 0.01, f'{title}', ha='center', fontsize=fontsize)
 
     if save_path:
-        plt.savefig(f"{save_path}/lr_curve.png", format="png", dpi=300, bbox_inches="tight")
-        plt.savefig(f"{save_path}/lr_curve.svg", format="svg", bbox_inches="tight")
+        plt.savefig(f'{save_path}/lr_curve.png', format='png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}/lr_curve.svg', format='svg', bbox_inches='tight')
 
     plt.show()
 
@@ -89,11 +90,11 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
                           figsize=(10, 10), fontsize=14, title=None, save_path=None):
 
     if cm.ndim != 2 or cm.shape[0] != cm.shape[1]:
-        raise ValueError("Confusion matrix must be a 2D square matrix")
+        raise ValueError('Confusion matrix must be a 2D square matrix')
     n_classes = cm.shape[0]
 
     if task == 'binary' and n_classes != 2:
-        raise ValueError("For binary classification, the confusion matrix must have shape (2, 2)")
+        raise ValueError('For binary classification, the confusion matrix must have shape (2, 2)')
 
     if class_names is None:
         if task == 'binary':
@@ -102,7 +103,7 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
             class_names = [f'Class {i}' for i in range(n_classes)]
 
     if len(class_names) != n_classes:
-        raise ValueError(f"Number of class names ({len(class_names)}) does not match the number of classes ({n_classes})")
+        raise ValueError(f'Number of class names ({len(class_names)}) does not match the number of classes ({n_classes})')
 
     cm = cm.astype('float')
     correct = np.trace(cm)
@@ -134,10 +135,10 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
         plt.text(
             j, i,
             format(cm[i, j], fmt),
-            ha="center",
-            va="center",
+            ha='center',
+            va='center',
             fontsize=fontsize,
-            color="white" if cm[i, j] > thresh else "black"
+            color='white' if cm[i, j] > thresh else 'black'
         )
 
     plt.ylabel('True label', fontsize=fontsize)
@@ -149,8 +150,8 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
 
     if save_path:
         suffix = 'norm' if norm else 'unnorm'
-        plt.savefig(f"{save_path}/conf_matrix_{suffix}.png", format="png", dpi=300, bbox_inches="tight")
-        plt.savefig(f"{save_path}/conf_matrix_{suffix}.svg", format="svg", bbox_inches="tight")
+        plt.savefig(f'{save_path}/conf_matrix_{suffix}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}/conf_matrix_{suffix}.svg', format='svg', bbox_inches='tight')
 
     plt.show()
 
@@ -191,7 +192,7 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
 
         fpr_micro, tpr_micro, _ = roc_curve(y_true_bin.ravel(), y_pred_probs.ravel())
         auc_micro = auc(fpr_micro, tpr_micro)
-        plt.plot(fpr_micro, tpr_micro, linestyle="--", lw=2, label=f'Micro-average (AUC = {auc_micro:.4f})')
+        plt.plot(fpr_micro, tpr_micro, linestyle='--', lw=2, label=f'Micro-average (AUC = {auc_micro:.4f})')
 
         all_fpr = np.linspace(0, 1, 100)
         mean_tpr = np.zeros_like(all_fpr)
@@ -227,20 +228,87 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
     plt.yticks(fontsize=fontsize)
 
     if save_path:
-        plt.savefig(f'{save_path}/roc_auc_curve.png', format="png", dpi=300, bbox_inches="tight")
-        plt.savefig(f'{save_path}/roc_auc_curve.svg', format="svg", bbox_inches="tight")
+        plt.savefig(f'{save_path}/roc_auc_curve.png', format='png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}/roc_auc_curve.svg', format='svg', bbox_inches='tight')
+
+    plt.show()
+
+# visualize images
+def vis_images(df, filepaths_col, label_col, n_rows=2, n_cols=5,
+               target_size=(224, 224), figsize=(15, 6), fontsize=14, title=None, save_path=None):
+
+    total_slots = n_rows * n_cols
+    subset = df.iloc[:total_slots]
+    total_images = len(subset)
+
+    fig = plt.figure(figsize=figsize)
+
+    if title:
+        fig.suptitle(title, fontsize=fontsize + 2, fontweight='bold', y=0.97)
+
+    img_width = 0.15
+    img_height = 0.35
+    spacing = 0.02
+
+    for r in range(n_rows):
+        row_start = r * n_cols
+        row_end = min(row_start + n_cols, total_images)
+        row_items = row_end - row_start
+
+        if row_items <= 0:
+            break
+
+        total_row_width = row_items * img_width + (row_items - 1) * spacing
+        start_x = (1.0 - total_row_width) / 2
+
+        y_pos = 0.55 - r * 0.45
+
+        for c in range(row_items):
+            idx = row_start + c
+            row = subset.iloc[idx]
+            img_path = pathlib.Path(row[filepaths_col])
+
+            ax = fig.add_axes([
+                start_x + c * (img_width + spacing),
+                y_pos,
+                img_width,
+                img_height
+            ])
+
+            img = Image.open(img_path).convert('RGB').resize(target_size)
+            ax.imshow(img)
+
+            ax.text(
+                0.5, -0.1,
+                f'{row[label_col]}',
+                fontsize=fontsize,
+                ha='center',
+                va='center',
+                transform=ax.transAxes
+            )
+
+            ax.axis('off')
+
+    if save_path:
+        plt.savefig(f'{save_path}.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}.svg', bbox_inches='tight')
 
     plt.show()
 
 # visualize predictions
 def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col,
-              n_images=7, target_size=(224, 224),
+              n_images=7, n_rows=None, target_size=(224, 224),
               figsize=(15, 3), fontsize=12, title=None, save_path=None):
 
-    classes = np.sort(df[true_label_col].unique())
-    n_rows = len(classes)
-    n_cols = n_images
+    all_classes = np.sort(df[true_label_col].unique())
 
+    if n_rows is not None and n_rows < len(all_classes):
+        classes = all_classes[:n_rows]
+    else:
+        classes = all_classes
+        n_rows = len(classes)
+
+    n_cols = n_images
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize[0], figsize[1] * n_rows))
 
     axes = np.atleast_2d(axes)
@@ -287,3 +355,86 @@ def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col,
         plt.savefig(f'{save_path}.svg', bbox_inches='tight')
 
     plt.show()
+
+# แสดงภาพที่ซ้ำกันภายใน Class เดียวกัน
+def vis_intra_dups_images(df, filepaths_col, labels_col, dups_paths_col, max_display=5,
+                          fontsize=14, target_size=(224, 224)):
+    unique_labels = sorted(df[labels_col].unique())
+
+    for label_name in unique_labels:
+        label_df = df[df[labels_col] == label_name]
+        num_cases = len(label_df)
+
+        max_dups_in_label = label_df[dups_paths_col].apply(len).max()
+        n_cols = 1 + min(max_dups_in_label, max_display)
+
+        fig_height = 3.5 * num_cases
+        fig_width = 3.5 * n_cols
+
+        fig, axes = plt.subplots(num_cases, n_cols, figsize=(fig_width, fig_height), squeeze=False)
+        fig.suptitle(f'Class: {label_name}', fontsize=fontsize, fontweight='bold')
+
+        for row_idx, (idx, data_row) in enumerate(label_df.iterrows()):
+            keeper_full_path = data_row[filepaths_col]
+            keeper_filename = os.path.basename(keeper_full_path)
+
+            ax_main = axes[row_idx, 0]
+            img = Image.open(keeper_full_path).convert('RGB').resize(target_size)
+
+            ax_main.imshow(img)
+            ax_main.set_title(f"Original\n{keeper_filename}", color='green', fontweight='bold', fontsize=fontsize-4)
+            ax_main.axis('off')
+
+            dups_paths_list = data_row[dups_paths_col]
+
+            for col_idx in range(1, n_cols):
+                ax_dup = axes[row_idx, col_idx]
+                dup_list_idx = col_idx - 1
+
+                if dup_list_idx < len(dups_paths_list):
+                    dup_full_path = dups_paths_list[dup_list_idx]
+                    dup_filename = os.path.basename(dup_full_path)
+
+                    img_dup = Image.open(dup_full_path).convert('RGB').resize(target_size)
+                    ax_dup.imshow(img_dup)
+                    ax_dup.set_title(f"Duplicate\n{dup_filename}", color='red', fontsize=fontsize-4)
+                    ax_dup.axis('off')
+                else:
+                    ax_dup.axis('off')
+                    ax_dup.set_visible(False)
+
+        plt.tight_layout()
+        plt.show()
+        print("-" * 80)
+
+# แสดงภาพที่ซ้ำกันระหว่าง Class
+def vis_inter_dups_images(df, filepaths_col, labels_col, max_display=5,
+                          fontsize=14, target_size=(224, 224)):
+    for idx, row in df.iterrows():
+        file_paths = row[filepaths_col]
+        involved_labels = row[labels_col]
+        n_cols = min(len(file_paths), max_display)
+
+        fig_width = 3.5 * n_cols
+        fig_height = 4.0
+        fig, axes = plt.subplots(1, n_cols, figsize=(fig_width, fig_height), squeeze=False)
+
+        labels_str = ", ".join(involved_labels)
+        fig.suptitle(f'Involved Classes: {labels_str}',
+                     fontsize=fontsize, fontweight='bold', y=1.05)
+
+        for col_idx in range(n_cols):
+            ax = axes[0, col_idx]
+            path = file_paths[col_idx]
+            filename = os.path.basename(path)
+            current_label = os.path.basename(os.path.dirname(path))
+            img = Image.open(path).convert('RGB').resize(target_size)
+
+            ax.imshow(img)
+            ax.set_title(f"Folder: {current_label}\n{filename}",
+                         fontsize=fontsize-4, fontweight='bold')
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.show()
+        print("-" * 80)
