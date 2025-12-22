@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as font_manager
 import itertools
 import pathlib
+import os
 from PIL import Image
 
 import numpy as np
