@@ -13,73 +13,24 @@ import shutil
 import tempfile
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageStat
+import cv2
 import pickle
 from tqdm import tqdm
 import torch
 from torchvision.transforms import v2
-from imagededup.methods import PHash
+from imagededup.methods import PHash, CNN
+from sklearn.ensemble import IsolationForest
 from collections import defaultdict
 
-# สำหรับตรวจสอบภาพที่เสีย
-def verify_images(dir):
-    ImageFile.LOAD_TRUNCATED_IMAGES = False
-    corrupted_imgs = set()
-    dir = pathlib.Path(dir)
-
-    Image.init()
-    extensions = {ext.lower() for ext in Image.EXTENSION.keys()}
-
-    img_files = []
-    found_extensions = set()
-
-    for path in dir.rglob('*'):
-        if path.is_file() and path.suffix.lower() in extensions:
-            img_files.append(path)
-            found_extensions.add(path.suffix)
-
-    if found_extensions:
-        print(f"[Log]: Extensions detect {', '.join(sorted(found_extensions))}")
-        print(f'[Log]: Total images found: {len(img_files)}')
-    else:
-        print(f'[Log]: No images found in {dir}')
-        return []
-
-    for img_path in tqdm(img_files, desc='Verifying images'):
-        if img_path in corrupted_imgs:
-            continue
-        try:
-            with Image.open(img_path) as img:
-                img.verify()
-
-        except Exception as e:
-            print(f'[Log]: Corrupted {img_path}: {e}')
-            corrupted_imgs.add(img_path)
-
-    print('\n--- Summary ---')
-    print(f'[Log]: Found {len(corrupted_imgs)} corrupted images.')
-    return [str(p) for p in corrupted_imgs]
-
-# สำหรับลบภาพที่ไม่ต้องการใช้ออก
-def remove_images(img_paths):
-    print('\n--- Removing Files ---')
-    for img_path in img_paths:
-        try:
-            file_to_remove = pathlib.Path(img_path)
-            file_to_remove.unlink()
-            print(f'[Removed]: {file_to_remove.name}')
-
-        except Exception as e:
-            print(f'[Error removing]: {img_path} : {e}')
-
 # อ่าน Folder ภาพออกมาเป็น filepaths และ labels
-def read_images(dir, extensions=('.jpg', '.jpeg', '.png')):
+def read_images(data_dir, extensions=('.jpg', '.jpeg', '.png')):
     filepaths = []
     labels = []
 
-    dir = pathlib.Path(dir)
+    data_dir = pathlib.Path(data_dir)
 
-    for label_dir in sorted(p for p in dir.iterdir() if p.is_dir()):
+    for label_dir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
         for img_path in sorted(label_dir.iterdir()):
             if img_path.suffix.lower() in extensions:
                 filepaths.append(str(img_path))
@@ -96,61 +47,115 @@ def to_directory(filepaths, labels, dest_dir):
         save_path = os.path.join(label_dir, os.path.basename(filepath))
         shutil.copy2(filepath, save_path)
 
-# สำหรับเตรียม transfrom sample ในรูปแบบ dict{(key_transform : torchvision.transform....)}
-def prepare_transform(df, transform_dict, filepaths_col, label_col, target_size=(224, 224), temp_dir_path=None):
-    if temp_dir_path is None:
-        temp_dir = tempfile.mkdtemp()
-    else:
-        temp_dir = temp_dir_path
-        os.makedirs(temp_dir, exist_ok=True)
+def verify_images(data_dir, min_width=64, min_height=64,
+                  min_brightness=0.0, max_brightness=0.0,
+                  blur_threshold=0.0, check_solid=True):
 
-    sample = df.sample(1).iloc[0]
-    orig_path = sample[filepaths_col]
-    orig_class = sample[label_col]
+    ImageFile.LOAD_TRUNCATED_IMAGES = False
+    report_dict = {
+        'filepaths': [],
+        'filename': [],
+        'label': [],
+        'issue': [],
+        'score': []
+    }
 
-    orig_img_pil = Image.open(orig_path).convert('RGB')
-    orig_img_pil = orig_img_pil.resize((224, 224))
+    data_dir = pathlib.Path(data_dir)
+    Image.init()
+    extensions = {ext.lower() for ext in Image.EXTENSION.keys()}
 
-    to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
-    to_pil = v2.ToPILImage()
+    img_files = []
+    found_extensions = set()
 
-    img_tensor = to_tensor(orig_img_pil)
+    for path in data_dir.rglob('*'):
+        if path.is_file() and path.suffix.lower() in extensions:
+            img_files.append(path)
+            found_extensions.add(path.suffix)
 
-    data_list = []
+    if not img_files:
+        print(f'[Log]: No images found in {data_dir}')
+        return report_dict
 
-    save_name_orig = '00_original.jpg'
-    save_path_orig = os.path.join(temp_dir, save_name_orig)
-    orig_img_pil.save(save_path_orig)
+    print(f"[Log]: Extensions detect {', '.join(sorted(found_extensions))}")
+    print(f'[Log]: Total images found: {len(img_files)}')
 
-    data_list.append({
-        filepaths_col: save_path_orig,
-        label_col: 'Original image'
-    })
+    def log_issue(path, issue_type, val_score=0.0):
+        report_dict['filepaths'].append(str(path))
+        report_dict['filename'].append(path.name)
+        report_dict['label'].append(path.parent.name)
+        report_dict['issue'].append(issue_type)
+        report_dict['score'].append(val_score)
 
-    for idx, (name, transform) in enumerate(transform_dict.items()):
-        transformed_tensor = transform(img_tensor)
-        transformed_pil = to_pil(transformed_tensor.clamp(0, 1))
+    for img_path in tqdm(img_files, desc='Verifying images'):
+        str_path = str(img_path)
 
-        save_name = f"{idx+1:02d}_{name.replace(' ', '_')}.jpg"
-        save_path = os.path.join(temp_dir, save_name)
-        transformed_pil.save(save_path)
+        # Check corruption
+        try:
+            with Image.open(img_path) as img:
+                img.verify()
+        except Exception as e:
+            log_issue(img_path, 'corrupted', 0.0)
+            continue
 
-        data_list.append({
-            filepaths_col: save_path,
-            label_col: name
-        })
+        # Check content (Size, Solid, Blur, Brightness)
+        try:
+            with Image.open(img_path) as img:
+                img = img.convert('RGB')
+                w, h = img.size
 
-    viz_df = pd.DataFrame(data_list)
-    return viz_df, temp_dir
+                # Check size
+                if w < min_width or h < min_height:
+                    log_issue(img_path, 'too_small', min(w, h))
+                    continue
+
+                # Check solid color
+                if check_solid:
+                    extrema = img.getextrema()
+                    if all(min_val == max_val for min_val, max_val in extrema):
+                        log_issue(img_path, 'solid_color', 0.0)
+                        continue
+
+                img_cv = np.array(img)
+                gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+
+                # Check brightness
+                if min_brightness > 0 or max_brightness > 0:
+                    mean_brightness = np.mean(gray)
+
+                    if min_brightness > 0 and mean_brightness < min_brightness:
+                        log_issue(img_path, 'too_dark', mean_brightness)
+                        continue
+
+                    if max_brightness > 0 and mean_brightness > max_brightness:
+                        log_issue(img_path, 'too_bright', mean_brightness)
+                        continue
+
+                # Check blur
+                if blur_threshold > 0:
+                    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+                    if blur_score < blur_threshold:
+                        log_issue(img_path, 'blurry', blur_score)
+                        continue
+
+        except Exception as e:
+            log_issue(img_path, 'corrupted', 0.0)
+            continue
+
+    total_issues = len(report_dict['filepaths'])
+    print('\n--- Summary ---')
+    print(f"Total issues found: {total_issues}")
+
+    return report_dict
 
 # หา Hash สำหรับภาพแต่ละภาพ
-# Ref: https://github.com/idealo/imagededup
-def find_hasher(dir, output_path=None, extensions=('.jpg', '.jpeg', '.png')):
+# Source library: https://github.com/idealo/imagededup
+def find_hasher(data_dir, output_path=None, extensions=('.jpg', '.jpeg', '.png')):
     phasher = PHash()
     hashes_dict = {}
     target_folders = []
 
-    for root, dirs, files in os.walk(dir):
+    for root, dirs, files in os.walk(data_dir):
         has_images = any(f.lower().endswith(extensions) for f in files)
         if has_images:
             target_folders.append(root)
@@ -183,7 +188,7 @@ def find_hasher(dir, output_path=None, extensions=('.jpg', '.jpeg', '.png')):
     return hashes_dict
 
 # ตรวจสอบ Duplicates ทั้งภายใน Class และภายนอก Class สำหรับทุก Class ใน Dataset
-def check_duplicates(hashes_dict):
+def find_duplicates(hashes_dict):
     reverse_index = defaultdict(list)
     total_images = 0
 
@@ -197,8 +202,15 @@ def check_duplicates(hashes_dict):
 
     print(f'\nFound {total_images} images in total.')
 
-    intra_label_dups = [] # ซ้ำกันภายใน label เดียวกัน
-    inter_label_dups = [] # ซ้ำกันระหว่าง label
+    # ภาพซ้ำกันภายใน Class เดียวกัน
+    intra_report = {
+        'filepaths': [], 'filename': [], 'label': [], 'issue': [], 'hash_group': [], 'keep': []
+    }
+
+    # ภาพซ้ำกันระหว่าง Class
+    inter_report = {
+        'filepaths': [], 'filename': [], 'label': [], 'issue': [], 'hash_group': [], 'conflicting_labels': []
+    }
 
     for hash_val, file_list in reverse_index.items():
         # ถ้าไม่ซ้ำ คือเจอไฟล์แค่ไฟล์เดียว
@@ -207,24 +219,173 @@ def check_duplicates(hashes_dict):
 
         labels_found = set(item['label'] for item in file_list)
         if len(labels_found) == 1:
-            # ซ้ำใน label เดียวกันหมด
+            # ภาพซ้ำกันภายใน Class เดียวกัน
             sorted_files = sorted(file_list, key=lambda x: x['full_path'])
-            current = sorted_files[0]
-            duplicates = sorted_files[1:]
 
-            intra_label_dups.append({
-                'hash': hash_val,
-                'labels': current['label'],
-                'current_path': current['full_path'],
-                'duplicates_paths': [d['full_path'] for d in duplicates],
-                'counts': len(file_list)
-            })
+            for i, item in enumerate(sorted_files):
+                intra_report['filepaths'].append(item['full_path'])
+                intra_report['filename'].append(os.path.basename(item['full_path']))
+                intra_report['label'].append(item['label'])
+                intra_report['issue'].append('intra_duplicate')
+                intra_report['hash_group'].append(hash_val)
+                intra_report['keep'].append(True if i == 0 else False)
         else:
-            # ซ้ำข้าม label
-            inter_label_dups.append({
-                'hash': hash_val,
-                'labels_involved': list(labels_found),
-                'involved_paths': [d['full_path'] for d in file_list],
-                'counts': len(file_list)
-            })
-    return intra_label_dups, inter_label_dups
+            # ภาพซ้ำกันระหว่าง Class
+            conflicting_str = ", ".join(sorted(list(labels_found)))
+
+            for i, item in enumerate(file_list):
+                inter_report['filepaths'].append(item['full_path'])
+                inter_report['filename'].append(os.path.basename(item['full_path']))
+                inter_report['label'].append(item['label'])
+                inter_report['issue'].append('inter_duplicate')
+                inter_report['hash_group'].append(hash_val)
+                inter_report['conflicting_labels'].append(conflicting_str)
+
+    return intra_report, inter_report
+
+# Source library: https://github.com/idealo/imagededup
+def find_outliers(data_dir, seed=42, contamination=0.05, extensions=('.jpg', '.jpeg', '.png')):
+    """
+        เป็นการ Check outlier โดยพิจารณาจาก Vector ที่ได้จาก CNN Encoder และนำ Vector ที่ได้ผ่านเข้าไปใน IsolationForest อีกที
+        โดยเป็น CNN จาก imagededup library ซึ่งเป็นการตรวจสอบ Outlier ภายใน Class หรือ Label นั้น ๆ เท่านั้น ดูว่าภายใน Class
+        เดียวกันภาพนั้นต่างจากพวกหรือไม่
+    """
+    cnn = CNN() # MobileNetV3 จาก imagededup
+    report_dict = {
+        'filepaths': [],
+        'filename': [],
+        'label': [],
+        'issue': [],
+        'score': []
+    }
+    target_folders = []
+
+    for root, dirs, files in os.walk(data_dir):
+        has_images = any(f.lower().endswith(extensions) for f in files)
+        if has_images:
+            target_folders.append(root)
+
+    print(f'Found {len(target_folders)} folders containing images.')
+
+    for folder_path in target_folders:
+        label_name = os.path.basename(folder_path)
+
+        try:
+            encodings = cnn.encode_images(image_dir=folder_path)
+            filenames = list(encodings.keys())
+            vectors = np.array(list(encodings.values()))
+
+            clf = IsolationForest(contamination=contamination, random_state=seed, n_jobs=-1)
+            clf.fit(vectors)
+
+            preds = clf.predict(vectors)
+            scores = clf.decision_function(vectors)
+
+            for i, pred in enumerate(preds):
+                if pred == -1:
+                    full_path = os.path.join(folder_path, filenames[i])
+
+                    report_dict['filepaths'].append(full_path)
+                    report_dict['filename'].append(filenames[i])
+                    report_dict['label'].append(label_name)
+                    report_dict['issue'].append('outlier')
+                    report_dict['score'].append(scores[i])
+
+            print(f"Class {label_name}: Found {list(preds).count(-1)} outliers.")
+        except Exception as e:
+            print(f"Error processing folder {folder_path}: {e}")
+
+    return report_dict
+
+def export_bad_images(df, filepaths_col, filename_col, label_col, issue_col, output_base_dir):
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Exporting"):
+        src_path = row[filepaths_col]
+        filename = row[filename_col]
+        label = row[label_col]
+        issue = str(row[issue_col])
+
+        target_dir = os.path.join(output_base_dir, issue, label)
+        os.makedirs(target_dir, exist_ok=True)
+
+        final_filename = filename
+        target_path = os.path.join(target_dir, final_filename)
+
+        shutil.copy2(src_path, target_path)
+
+    print(f'\nExport completed to: {output_base_dir}')
+
+def export_duplicates_images(df, filepaths_col, filename_col, label_col, hash_group_col,
+                             output_base_dir, issue_type='intra'):
+    valid_modes = ['intra', 'inter']
+    if issue_type not in valid_modes:
+        raise ValueError(f"Mode must be one of {valid_modes}, but got '{issue_type}'")
+
+    mode_folder_name = f"{issue_type}_duplicate"
+    base_target_dir = os.path.join(output_base_dir, mode_folder_name)
+    os.makedirs(base_target_dir, exist_ok=True)
+
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc=f"Exporting {issue_type}"):
+        src_path = row[filepaths_col]
+        filename = row[filename_col]
+        label = row[label_col]
+        hash_val = str(row[hash_group_col])
+
+        if issue_type == 'intra':
+            target_dir = os.path.join(base_target_dir, label, hash_val)
+            final_filename = filename
+
+        elif issue_type == 'inter':
+            target_dir = os.path.join(base_target_dir, hash_val)
+            final_filename = f"{label}_{filename}"
+
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, final_filename)
+
+        shutil.copy2(src_path, target_path)
+
+    print(f'\nExport completed to: {output_base_dir}')
+
+# สำหรับเตรียม transfrom sample ในรูปแบบ dict{(key_transform : torchvision.transform....)}
+def prepare_transform(df, transform_dict, filepaths_col, label_col, target_size=(224, 224), temp_dir_path=None):
+    if temp_dir_path is None:
+        temp_dir = tempfile.mkdtemp()
+    else:
+        temp_dir = temp_dir_path
+        os.makedirs(temp_dir, exist_ok=True)
+
+    sample = df.sample(1).iloc[0]
+    orig_path = sample[filepaths_col]
+    orig_class = sample[label_col]
+
+    orig_img_pil = Image.open(orig_path).convert('RGB').resize(target_size)
+
+    to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
+    to_pil = v2.ToPILImage()
+
+    img_tensor = to_tensor(orig_img_pil)
+
+    data_list = []
+
+    save_name_orig = '00_original.jpg'
+    save_path_orig = os.path.join(temp_dir, save_name_orig)
+    orig_img_pil.save(save_path_orig)
+
+    data_list.append({
+        filepaths_col: save_path_orig,
+        label_col: 'Original image'
+    })
+
+    for idx, (name, transform) in enumerate(transform_dict.items()):
+        transformed_tensor = transform(img_tensor)
+        transformed_pil = to_pil(transformed_tensor.clamp(0, 1))
+
+        save_name = f"{idx+1:02d}_{name.replace(' ', '_')}.jpg"
+        save_path = os.path.join(temp_dir, save_name)
+        transformed_pil.save(save_path)
+
+        data_list.append({
+            filepaths_col: save_path,
+            label_col: name
+        })
+
+    return data_list, temp_dir

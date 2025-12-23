@@ -336,14 +336,8 @@ def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col,
                 confidence = row[prob_col]
                 color = 'green' if class_name == pred_class_name else 'red'
 
-                try:
-                    img = Image.open(img_path).convert('RGB')
-                    img = img.resize(target_size)
-                    img_display = np.array(img).astype('float32')
-                    img_display = (img_display - img_display.min()) / (img_display.max() - img_display.min() + 1e-7)
-                    ax.imshow(img_display)
-                except Exception as e:
-                    ax.text(0.5, 0.5, f'Image Error\n{e}', ha='center', va='center')
+                img = Image.open(img_path).convert('RGB').resize(target_size)
+                ax.imshow(img)
 
                 ax.set_title(f'True: {class_name}\nPred: {pred_class_name}\n(Conf: {confidence:.2f})',
                              fontsize=fontsize, color=color)
@@ -356,86 +350,3 @@ def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col,
         plt.savefig(f'{save_path}.svg', bbox_inches='tight')
 
     plt.show()
-
-# แสดงภาพที่ซ้ำกันภายใน Class เดียวกัน
-def vis_intra_dups_images(df, filepaths_col, labels_col, dups_paths_col, max_display=5,
-                          fontsize=14, target_size=(224, 224)):
-    unique_labels = sorted(df[labels_col].unique())
-
-    for label_name in unique_labels:
-        label_df = df[df[labels_col] == label_name]
-        num_cases = len(label_df)
-
-        max_dups_in_label = label_df[dups_paths_col].apply(len).max()
-        n_cols = 1 + min(max_dups_in_label, max_display)
-
-        fig_height = 3.5 * num_cases
-        fig_width = 3.5 * n_cols
-
-        fig, axes = plt.subplots(num_cases, n_cols, figsize=(fig_width, fig_height), squeeze=False)
-        fig.suptitle(f'Class: {label_name}', fontsize=fontsize, fontweight='bold')
-
-        for row_idx, (idx, data_row) in enumerate(label_df.iterrows()):
-            keeper_full_path = data_row[filepaths_col]
-            keeper_filename = os.path.basename(keeper_full_path)
-
-            ax_main = axes[row_idx, 0]
-            img = Image.open(keeper_full_path).convert('RGB').resize(target_size)
-
-            ax_main.imshow(img)
-            ax_main.set_title(f"Original\n{keeper_filename}", color='green', fontweight='bold', fontsize=fontsize-4)
-            ax_main.axis('off')
-
-            dups_paths_list = data_row[dups_paths_col]
-
-            for col_idx in range(1, n_cols):
-                ax_dup = axes[row_idx, col_idx]
-                dup_list_idx = col_idx - 1
-
-                if dup_list_idx < len(dups_paths_list):
-                    dup_full_path = dups_paths_list[dup_list_idx]
-                    dup_filename = os.path.basename(dup_full_path)
-
-                    img_dup = Image.open(dup_full_path).convert('RGB').resize(target_size)
-                    ax_dup.imshow(img_dup)
-                    ax_dup.set_title(f"Duplicate\n{dup_filename}", color='red', fontsize=fontsize-4)
-                    ax_dup.axis('off')
-                else:
-                    ax_dup.axis('off')
-                    ax_dup.set_visible(False)
-
-        plt.tight_layout()
-        plt.show()
-        print("-" * 80)
-
-# แสดงภาพที่ซ้ำกันระหว่าง Class
-def vis_inter_dups_images(df, filepaths_col, labels_col, max_display=5,
-                          fontsize=14, target_size=(224, 224)):
-    for idx, row in df.iterrows():
-        file_paths = row[filepaths_col]
-        involved_labels = row[labels_col]
-        n_cols = min(len(file_paths), max_display)
-
-        fig_width = 3.5 * n_cols
-        fig_height = 4.0
-        fig, axes = plt.subplots(1, n_cols, figsize=(fig_width, fig_height), squeeze=False)
-
-        labels_str = ", ".join(involved_labels)
-        fig.suptitle(f'Involved Classes: {labels_str}',
-                     fontsize=fontsize, fontweight='bold', y=1.05)
-
-        for col_idx in range(n_cols):
-            ax = axes[0, col_idx]
-            path = file_paths[col_idx]
-            filename = os.path.basename(path)
-            current_label = os.path.basename(os.path.dirname(path))
-            img = Image.open(path).convert('RGB').resize(target_size)
-
-            ax.imshow(img)
-            ax.set_title(f"Folder: {current_label}\n{filename}",
-                         fontsize=fontsize-4, fontweight='bold')
-            ax.axis('off')
-
-        plt.tight_layout()
-        plt.show()
-        print("-" * 80)
