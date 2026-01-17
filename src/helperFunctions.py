@@ -14,10 +14,14 @@ import itertools
 import pathlib
 import os
 from PIL import Image
-
+import cv2
 import numpy as np
-from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, roc_auc_score
+from sklearn.metrics import roc_curve, auc
 from sklearn.preprocessing import label_binarize
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from pytorch_grad_cam.utils.image import show_cam_on_image
+from torchvision.transforms import v2
 
 # ตั้งค่า Font display
 def matplotlib_font(font_dir, prefer_name=None):
@@ -88,7 +92,7 @@ def plot_lr_curve(history, figsize=(12, 5), fontsize=16, title=None, save_path=N
 
 # Plot consfusion matrix
 def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, task='multiclass',
-                          figsize=(10, 10), fontsize=14, title=None, save_path=None):
+                          figsize=(12, 5), fontsize=16, title=None, save_path=None):
 
     if cm.ndim != 2 or cm.shape[0] != cm.shape[1]:
         raise ValueError('Confusion matrix must be a 2D square matrix')
@@ -157,8 +161,8 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
     plt.show()
 
 def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass',
-                       legend_ncol=1, width_ratios=[3, 1], figsize=(14, 8),
-                       fontsize=14, title=None, save_path=None):
+                       legend_ncol=1, width_ratios=[3, 1], figsize=(12, 5),
+                       fontsize=16, title=None, save_path=None):
 
     fig, (ax_main, ax_legend) = plt.subplots(1, 2, figsize=figsize, gridspec_kw={'width_ratios': width_ratios})
 
@@ -242,6 +246,125 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
 
     plt.show()
 
+# visualize predictions
+def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col, seed,
+              n_images=7, n_rows=None, target_size=(224, 224),
+              figsize=(12, 5), fontsize=16, title=None, save_path=None):
+
+    all_classes = np.sort(df[true_label_col].unique())
+
+    if n_rows is not None and n_rows < len(all_classes):
+        classes = all_classes[:n_rows]
+    else:
+        classes = all_classes
+        n_rows = len(classes)
+
+    n_cols = n_images
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize[0], figsize[1] * n_rows))
+
+    axes = np.atleast_2d(axes)
+    if axes.shape[0] != n_rows or axes.shape[1] != n_cols:
+        axes = axes.reshape(n_rows, n_cols)
+
+    if title:
+        fig.suptitle(title, fontsize=fontsize + 4, y=0.92)
+
+    for row_idx, class_name in enumerate(classes):
+        df_class = df[df[true_label_col] == class_name].sample(
+            n=min(n_images, len(df[df[true_label_col] == class_name])),
+            random_state=seed
+        ).reset_index(drop=True)
+
+        for col_idx in range(n_cols):
+            ax = axes[row_idx, col_idx]
+            ax.axis('off')
+
+            if col_idx < len(df_class):
+                row = df_class.iloc[col_idx]
+                img_path = row[filepaths_col]
+                pred_class_name = row[pred_label_col]
+                confidence = row[prob_col]
+                color = 'green' if class_name == pred_class_name else 'red'
+
+                img = Image.open(img_path).convert('RGB').resize(target_size)
+                ax.imshow(img)
+
+                ax.set_title(f'True: {class_name}\nPred: {pred_class_name}\n(Conf: {confidence:.2f})',
+                             fontsize=fontsize, color=color)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=1.0 - (0.05 / n_rows))
+
+    if save_path:
+        plt.savefig(f'{save_path}/vis_preds.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}/vis_preds.svg', bbox_inches='tight')
+
+    plt.show()
+
+# ใช้คู่กับ plot_grad_cam
+def preprocess_input(img_path, mean, std, target_size):
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, target_size)
+    raw_img = np.float32(img) / 255.0
+
+    img_tensor = v2.ToImage()(img)
+    img_tensor = v2.ToDtype(torch.float32, scale=True)(img_tensor)
+    img_tensor = v2.Normalize(mean=mean, std=std)(img_tensor)
+    img_tensor = img_tensor.unsqueeze(0)
+    return raw_img, img_tensor
+
+def plot_grad_cam(model, conv_layers, df, filepaths_col, true_label_col, true_idx,
+                  probs_col, mean, std, target_size=(224, 224), figsize=(20, 5),
+                  fontsize=16, title=None, save_path=None):
+
+    '''
+        Ref: https://github.com/jacobgil/pytorch-grad-cam
+    '''
+    cam = GradCAM(model=model, target_layers=conv_layers)
+    num_imgs = len(df)
+
+    fig, axes = plt.subplots(nrows=2, ncols=num_imgs, figsize=figsize)
+
+    if num_imgs == 1:
+        axes = axes.reshape(2, 1)
+
+    if title:
+        fig.suptitle(title, fontsize=fontsize + 4, y=0.92)
+
+    model.eval()
+
+    for i, (idx, row) in enumerate(df.iterrows()):
+        img_path = row[filepaths_col]
+        true_label = row[true_label_col]
+        true_label_idx = int(row[true_idx])
+        prob = row[probs_col]
+
+        raw_img, img_tensor = preprocess_input(img_path, mean, std, target_size)
+
+        targets = [ClassifierOutputTarget(true_label_idx)]
+        grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
+        grayscale_cam = grayscale_cam[0, :]
+        visualization = show_cam_on_image(raw_img, grayscale_cam, use_rgb=True)
+
+        # --- Row 1: Original Image ---
+        axes[0, i].imshow(raw_img)
+        axes[0, i].set_title(true_label, fontsize=fontsize)
+        axes[0, i].axis('off')
+
+        # --- Row 2: Grad-CAM Image ---
+        axes[1, i].imshow(visualization)
+        axes[1, i].axis('off')
+        axes[1, i].set_title(f'P = {prob:.5f}', fontsize=fontsize, y=-0.2)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(f'{save_path}/grad_cam.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}/grad_cam.svg', bbox_inches='tight')
+
+    plt.show()
+
 # visualize images
 def vis_images(df, filepaths_col, label_col, n_rows=2, n_cols=5,
                target_size=(224, 224), figsize=(15, 6), fontsize=14, title=None, save_path=None):
@@ -297,61 +420,6 @@ def vis_images(df, filepaths_col, label_col, n_rows=2, n_cols=5,
             )
 
             ax.axis('off')
-
-    if save_path:
-        plt.savefig(f'{save_path}.png', dpi=300, bbox_inches='tight')
-        plt.savefig(f'{save_path}.svg', bbox_inches='tight')
-
-    plt.show()
-
-# visualize predictions
-def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col,
-              n_images=7, n_rows=None, target_size=(224, 224),
-              figsize=(15, 3), fontsize=12, title=None, save_path=None):
-
-    all_classes = np.sort(df[true_label_col].unique())
-
-    if n_rows is not None and n_rows < len(all_classes):
-        classes = all_classes[:n_rows]
-    else:
-        classes = all_classes
-        n_rows = len(classes)
-
-    n_cols = n_images
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize[0], figsize[1] * n_rows))
-
-    axes = np.atleast_2d(axes)
-    if axes.shape[0] != n_rows or axes.shape[1] != n_cols:
-        axes = axes.reshape(n_rows, n_cols)
-
-    if title:
-        fig.suptitle(title, fontsize=fontsize + 4, y=0.92)
-
-    for row_idx, class_name in enumerate(classes):
-        df_class = df[df[true_label_col] == class_name].sample(
-            n=min(n_images, len(df[df[true_label_col] == class_name])),
-            random_state=42
-        ).reset_index(drop=True)
-
-        for col_idx in range(n_cols):
-            ax = axes[row_idx, col_idx]
-            ax.axis('off')
-
-            if col_idx < len(df_class):
-                row = df_class.iloc[col_idx]
-                img_path = row[filepaths_col]
-                pred_class_name = row[pred_label_col]
-                confidence = row[prob_col]
-                color = 'green' if class_name == pred_class_name else 'red'
-
-                img = Image.open(img_path).convert('RGB').resize(target_size)
-                ax.imshow(img)
-
-                ax.set_title(f'True: {class_name}\nPred: {pred_class_name}\n(Conf: {confidence:.2f})',
-                             fontsize=fontsize, color=color)
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=1.0 - (0.05 / n_rows))
 
     if save_path:
         plt.savefig(f'{save_path}.png', dpi=300, bbox_inches='tight')

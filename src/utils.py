@@ -13,7 +13,7 @@ import numpy as np
 import random as rd
 
 # สำหรับ Setting seed environment
-def seed_everything(seed_num=42):
+def seed_everything(seed_num):
     os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
     os.environ['PYTHONHASHSEED']=str(seed_num)
     rd.seed(seed_num)
@@ -69,3 +69,20 @@ def load_model(save_path, model, optimizer=None, device='cpu', strict=True):
                     state[key] = value.to(device)
 
     return checkpoint
+
+# ดึง Label จาก dataloader
+def get_labels(dataloader):
+    true_labels = []
+
+    for batch in dataloader:
+        if isinstance(batch, (list, tuple)):
+            labels = batch[1]
+        else:
+            raise ValueError('Loader format not supported')
+
+        if labels.ndim > 1:
+            labels = labels.view(-1)
+
+        true_labels.append(labels.detach().cpu().numpy())
+
+    return np.concatenate(true_labels)
