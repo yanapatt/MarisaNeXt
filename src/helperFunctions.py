@@ -126,7 +126,7 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
     plt.colorbar()
 
     tick_marks = np.arange(n_classes)
-    plt.xticks(tick_marks, class_names, rotation=45, fontsize=fontsize)
+    plt.xticks(tick_marks, class_names, rotation=90, fontsize=fontsize)
     plt.yticks(tick_marks, class_names, fontsize=fontsize)
 
     fmt = '.2f' if norm else '.0f'
@@ -156,10 +156,12 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
 
     plt.show()
 
-# Plot roc auc curve
 def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass',
-                       figsize=(10, 10), fontsize=14, title=None, save_path=None):
-    plt.figure(figsize=figsize)
+                       legend_ncol=1, width_ratios=[3, 1], figsize=(14, 8),
+                       fontsize=14, title=None, save_path=None):
+
+    fig, (ax_main, ax_legend) = plt.subplots(1, 2, figsize=figsize, gridspec_kw={'width_ratios': width_ratios})
+
     if task == 'binary':
         if y_true.ndim != 1:
             raise ValueError('For binary classification, y_true should be a 1D array')
@@ -173,8 +175,8 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
 
         fpr, tpr, _ = roc_curve(y_true, y_score)
         roc_auc = auc(fpr, tpr)
+        ax_main.plot(fpr, tpr, lw=3, label=f'ROC curve (AUC = {roc_auc:.4f})')
 
-        plt.plot(fpr, tpr, lw=2, label=f'ROC curve (AUC = {roc_auc:.4f})')
     else:
         # multiclass
         if y_pred_probs.ndim != 2:
@@ -186,14 +188,17 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
 
         y_true_bin = label_binarize(y_true, classes=range(n_classes))
 
+        cmap = plt.get_cmap('viridis')
+        colors = [cmap(i) for i in np.linspace(0, 0.9, n_classes)]
         for i in range(n_classes):
             fpr, tpr, _ = roc_curve(y_true_bin[:, i], y_pred_probs[:, i])
             roc_auc = auc(fpr, tpr)
-            plt.plot(fpr, tpr, lw=2, label=f'{class_names[i]} (AUC = {roc_auc:.4f})')
+            ax_main.plot(fpr, tpr, lw=2, color=colors[i], label=f'{class_names[i]} (AUC = {roc_auc:.4f})')
 
         fpr_micro, tpr_micro, _ = roc_curve(y_true_bin.ravel(), y_pred_probs.ravel())
         auc_micro = auc(fpr_micro, tpr_micro)
-        plt.plot(fpr_micro, tpr_micro, linestyle='--', lw=2, label=f'Micro-average (AUC = {auc_micro:.4f})')
+        ax_main.plot(fpr_micro, tpr_micro, linestyle='--', lw=2, color='black',
+                     label=f'Micro-average (AUC = {auc_micro:.4f})')
 
         all_fpr = np.linspace(0, 1, 100)
         mean_tpr = np.zeros_like(all_fpr)
@@ -204,29 +209,32 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
         mean_tpr /= n_classes
         mean_tpr[0] = 0.0
         mean_tpr[-1] = 1.0
+
         auc_macro = auc(all_fpr, mean_tpr)
+        ax_main.plot(all_fpr, mean_tpr, label=f'Macro-average (AUC = {auc_macro:.4f})',
+                     color='navy', linestyle=':', lw=3)
 
-        auc_macro = roc_auc_score(y_true_bin, y_pred_probs, multi_class='ovr', average='macro')
-        plt.plot(all_fpr, mean_tpr, label=f'Macro-average (AUC = {auc_macro:.4f})', color='navy', linestyle=':', lw=3)
-
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    ax_main.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--', alpha=0.7)
 
     if title:
         plot_title = f'{title}\nReceiver Operating Characteristic (ROC)'
     else:
         plot_title = 'Receiver Operating Characteristic (ROC)'
 
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate', fontsize=fontsize)
-    plt.ylabel('True Positive Rate', fontsize=fontsize)
+    ax_main.set_xlim([0.0, 1.0])
+    ax_main.set_ylim([0.0, 1.05])
+    ax_main.set_xlabel('False Positive Rate', fontsize=fontsize)
+    ax_main.set_ylabel('True Positive Rate', fontsize=fontsize)
+    ax_main.set_title(plot_title, fontsize=fontsize)
+    ax_main.grid(alpha=0.3)
+    ax_main.tick_params(labelsize=fontsize)
 
-    plt.title(plot_title, fontsize=fontsize)
-    plt.legend(loc='lower right', fontsize=fontsize)
-    plt.grid(alpha=0.3)
+    handles, labels = ax_main.get_legend_handles_labels()
+    ax_legend.axis('off')
+    ax_legend.legend(handles, labels, loc='center left',
+                     ncol=legend_ncol, fontsize=fontsize, frameon=False)
 
-    plt.xticks(fontsize=fontsize)
-    plt.yticks(fontsize=fontsize)
+    plt.tight_layout()
 
     if save_path:
         plt.savefig(f'{save_path}/roc_auc_curve.png', format='png', dpi=300, bbox_inches='tight')

@@ -40,11 +40,10 @@ def perf_metrics(y_pred, y_true, n_classes, task='multiclass', average='macro'):
 # Training loop
 def train(
         model, optimizer, epoch, total_epochs, device, dataloader,
-        criterion, n_classes, task='multiclass', average='macro', max_grad_norm=1.0
+        criterion, n_classes, task='multiclass', average='macro', max_grad_norm=0.0
         ):
-    kbar = Kbar(target=len(dataloader), epoch=epoch, num_epochs=total_epochs,
-                width=30, always_stateful=True)
 
+    total_batches = len(dataloader)
     model.train()
 
     running_loss = 0.0
@@ -53,7 +52,22 @@ def train(
     all_preds = []
     all_labels = []
 
+    running_time_ms = 0.0
+    use_cuda = device.type == 'cuda'
+    if use_cuda:
+        # Reference: https://docs.pytorch.org/docs/stable/notes/cuda.html => (Asynchronous execution)
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+    kbar = Kbar(target=total_batches, epoch=epoch, num_epochs=total_epochs,
+                width=30, always_stateful=True)
+
     for i, (inputs, labels) in enumerate(dataloader):
+        if use_cuda:
+            start_event.record()
+        else:
+            iter_start = time()
+
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
@@ -73,10 +87,19 @@ def train(
         loss = criterion(outputs, labels)
         loss.backward()
 
-        # สำหรับ ViT
         if max_grad_norm > 0:
             clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
+
+        if use_cuda:
+            end_event.record()
+            torch.cuda.synchronize()
+            iter_ms = start_event.elapsed_time(end_event) # ได้หน่วย ms อยู่แล้ว
+        else:
+            iter_end = time()
+            iter_ms = (iter_end - iter_start) * 1000 # แปลงให้จาก s => ms
+
+        running_time_ms += iter_ms
 
         batch_size = inputs.size(0)
         running_loss += loss.item() * batch_size
@@ -124,13 +147,22 @@ def train(
 
     e_lr = optimizer.param_groups[0]['lr']
 
+    # 1. Latency (ms/batch)
+    e_latency = running_time_ms / total_batches
+
+    # 2. Throughput (samples/s)
+    total_seconds = running_time_ms / 1000
+    e_throughput = total_samples / total_seconds
+
     kbar.add(1, values=[
         ('loss', e_loss),
         ('accuracy', e_acc),
         ('f1', e_f1),
         ('precision', e_prec),
         ('recall', e_rec),
-        ('lr', e_lr)
+        ('lr', e_lr),
+        ('latency', e_latency),
+        ('throughput', e_throughput)
     ])
 
     return {
@@ -139,19 +171,18 @@ def train(
         'f1': e_f1,
         'precision': e_prec,
         'recall': e_rec,
-        'lr': e_lr
+        'lr': e_lr,
+        'latency': e_latency,
+        'throughput': e_throughput
     }
 
-# Evaluation loop
+# Evaluation
 def evaluate(
         model, device, dataloader, criterion,
         n_classes, task='multiclass', average='macro', verbose=True
         ):
 
-    kbar = None
-    if verbose:
-        kbar = Kbar(target=len(dataloader), width=30, always_stateful=True)
-
+    total_batches = len(dataloader)
     model.eval()
 
     running_loss = 0.0
@@ -159,6 +190,10 @@ def evaluate(
 
     all_preds = []
     all_labels = []
+
+    kbar = None
+    if verbose:
+        kbar = Kbar(target=total_batches, width=30, always_stateful=True)
 
     with torch.inference_mode():
         for i, (inputs, labels) in enumerate(dataloader):
@@ -210,7 +245,7 @@ def evaluate(
 
     # ป้องกันการหารด้วย 0
     if total_samples == 0:
-        return {key: 0.0 for key in ['loss', 'accuracy', 'f1', 'precision', 'recall', 'lr']}
+        return {key: 0.0 for key in ['loss', 'accuracy', 'f1', 'precision', 'recall']}
 
     # คำนวณ metrics ระดับ epoch เพื่อแสดง logs สุดท้าย
     e_preds = torch.cat(all_preds)
@@ -251,11 +286,9 @@ def fit(train_loader, val_loader, model, optimizer, epochs, device, criterion, n
     else:
         history = defaultdict(list)
 
-    g_start_time = time() # Global time
+    start_time = time() # Global time
 
     for epoch in range(initial_epoch, epochs):
-        e_start_time = time() # Time per epoch
-
         train_metrics = train(model, optimizer, epoch, epochs, device, train_loader, criterion, n_classes, task, average)
         val_metrics = evaluate(model, device, val_loader, criterion, n_classes, task, average, verbose=False)
 
@@ -270,16 +303,13 @@ def fit(train_loader, val_loader, model, optimizer, epochs, device, criterion, n
             else:
                 scheduler.step()
 
-        e_duration = time() - e_start_time
-
         history['epoch'].append(epoch + 1)
-        history['epoch_time'].append(e_duration)
 
         for key, value in logs.items():
             val = value.item() if hasattr(value, 'item') else value
             history[key].append(val)
 
-        print(f"val_loss: {logs['val_loss']:.4f} - val_accuracy: {logs['val_accuracy']:.4f} - val_f1: {logs['val_f1']:.4f} - val_precision: {logs['val_precision']:.4f} - val_recall: {logs['val_recall']:.4f} - time: {e_duration:.2f}s")
+        print(f"val_loss: {logs['val_loss']:.4f} - val_accuracy: {logs['val_accuracy']:.4f} - val_f1: {logs['val_f1']:.4f} - val_precision: {logs['val_precision']:.4f} - val_recall: {logs['val_recall']:.4f}")
 
         # Early stopping callback
         stop_signal = False
@@ -292,9 +322,9 @@ def fit(train_loader, val_loader, model, optimizer, epochs, device, criterion, n
         if stop_signal:
             break
 
-    g_duration = time() - g_start_time
+    duration = time() - start_time
     print('-' * 150)
-    print(f'[Logs] Training completed in {g_duration:.2f} seconds')
+    print(f'[Logs] Training completed in {duration:.2f} seconds')
 
     # Model checkpoint callback
     for callback in callbacks:
@@ -313,11 +343,20 @@ def fit(train_loader, val_loader, model, optimizer, epochs, device, criterion, n
     return history
 
 # Prediction
-def predict(dataloader, model, device, task='multiclass'):
+def predict(dataloader, model, device, task='multiclass', report_dict=False):
     model.eval()
     all_probs = []
 
-    kbar = Kbar(target=len(dataloader), width=30, always_stateful=True)
+    running_time_ms = 0.0
+    total_batches = len(dataloader)
+    total_inference_samples = 0
+
+    use_cuda = device.type == 'cuda'
+    if use_cuda:
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+    kbar = Kbar(target=total_batches, width=30, always_stateful=True)
 
     with torch.inference_mode():
         for i, batch in enumerate(dataloader):
@@ -328,7 +367,25 @@ def predict(dataloader, model, device, task='multiclass'):
                 inputs = batch
 
             inputs = inputs.to(device, non_blocking=True)
+            batch_size = inputs.size(0)
+            total_inference_samples += batch_size
+
+            if use_cuda:
+                start_event.record()
+            else:
+                iter_start = time()
+
             outputs = model(inputs)
+
+            if use_cuda:
+                end_event.record()
+                torch.cuda.synchronize()
+                iter_ms = start_event.elapsed_time(end_event)
+            else:
+                iter_end = time()
+                iter_ms = (iter_end - iter_start) * 1000
+
+            running_time_ms += iter_ms
 
             if task == 'multiclass':
                 probs = torch.softmax(outputs, dim=1)
@@ -340,5 +397,25 @@ def predict(dataloader, model, device, task='multiclass'):
             all_probs.append(probs.detach().cpu())
             kbar.add(1)
 
-    out_probs = torch.cat(all_probs)
-    return out_probs.numpy()
+    out_probs = torch.cat(all_probs).numpy()
+
+    if report_dict:
+        # 1. Latency (ms/batch)
+        latency_batch = running_time_ms / total_batches
+
+        # 2. Latency (ms/sample)
+        latency_sample = running_time_ms / total_inference_samples
+
+        # 3. Throughput (samples/s)
+        total_seconds = running_time_ms / 1000
+        throughput = total_inference_samples / total_seconds
+
+        report = {
+            'infer_latency': latency_batch,
+            'infer_latency_sample': latency_sample,
+            'infer_throughput': throughput,
+            'infer_total_samples': total_inference_samples
+        }
+        return out_probs, report
+
+    return out_probs

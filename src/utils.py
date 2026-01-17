@@ -14,16 +14,18 @@ import random as rd
 
 # สำหรับ Setting seed environment
 def seed_everything(seed_num=42):
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    os.environ['PYTHONHASHSEED']=str(seed_num)
     rd.seed(seed_num)
     np.random.seed(seed_num)
     torch.manual_seed(seed_num)
     torch.cuda.manual_seed(seed_num)
     torch.cuda.manual_seed_all(seed_num)
-    os.environ['PYTHONHASHSEED']=str(seed_num)
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark=False
         torch.backends.cudnn.deterministic=True
+        torch.use_deterministic_algorithms(True)
 
     print(f'Global seed has been set at {seed_num}')
 

@@ -21,6 +21,7 @@ import torch
 from torchvision.transforms import v2
 from imagededup.methods import PHash, CNN
 from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import normalize
 from collections import defaultdict
 
 # อ่าน Folder ภาพออกมาเป็น filepaths และ labels
@@ -29,12 +30,11 @@ def read_images(data_dir, extensions=('.jpg', '.jpeg', '.png')):
     labels = []
 
     data_dir = pathlib.Path(data_dir)
+    all_files = [p for p in data_dir.rglob('*') if p.suffix.lower() in extensions]
 
-    for label_dir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
-        for img_path in sorted(label_dir.iterdir()):
-            if img_path.suffix.lower() in extensions:
-                filepaths.append(str(img_path))
-                labels.append(label_dir.name)
+    for img_path in sorted(all_files):
+        filepaths.append(str(img_path))
+        labels.append(img_path.parent.name)
 
     return filepaths, labels
 
@@ -47,17 +47,13 @@ def to_directory(filepaths, labels, dest_dir):
         save_path = os.path.join(label_dir, os.path.basename(filepath))
         shutil.copy2(filepath, save_path)
 
-def verify_images(data_dir, min_width=64, min_height=64,
-                  min_brightness=0.0, max_brightness=0.0,
-                  blur_threshold=0.0, check_solid=True):
-
+def verify_images(data_dir, check_solid=True):
     ImageFile.LOAD_TRUNCATED_IMAGES = False
     report_dict = {
         'filepaths': [],
         'filename': [],
         'label': [],
-        'issue': [],
-        'score': []
+        'issue': []
     }
 
     data_dir = pathlib.Path(data_dir)
@@ -79,78 +75,39 @@ def verify_images(data_dir, min_width=64, min_height=64,
     print(f"[Log]: Extensions detect {', '.join(sorted(found_extensions))}")
     print(f'[Log]: Total images found: {len(img_files)}')
 
-    def log_issue(path, issue_type, val_score=0.0):
+    def log_issue(path, issue_type):
         report_dict['filepaths'].append(str(path))
         report_dict['filename'].append(path.name)
         report_dict['label'].append(path.parent.name)
         report_dict['issue'].append(issue_type)
-        report_dict['score'].append(val_score)
 
     for img_path in tqdm(img_files, desc='Verifying images'):
-        str_path = str(img_path)
-
-        # Check corruption
         try:
+            # Check solid color image
             with Image.open(img_path) as img:
-                img.verify()
-        except Exception as e:
-            log_issue(img_path, 'corrupted', 0.0)
-            continue
+                img_rgb = img.convert('RGB')
 
-        # Check content (Size, Solid, Blur, Brightness)
-        try:
-            with Image.open(img_path) as img:
-                img = img.convert('RGB')
-                w, h = img.size
-
-                # Check size
-                if w < min_width or h < min_height:
-                    log_issue(img_path, 'too_small', min(w, h))
-                    continue
-
-                # Check solid color
                 if check_solid:
-                    extrema = img.getextrema()
+                    extrema = img_rgb.getextrema()
+
                     if all(min_val == max_val for min_val, max_val in extrema):
-                        log_issue(img_path, 'solid_color', 0.0)
-                        continue
-
-                img_cv = np.array(img)
-                gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
-
-                # Check brightness
-                if min_brightness > 0 or max_brightness > 0:
-                    mean_brightness = np.mean(gray)
-
-                    if min_brightness > 0 and mean_brightness < min_brightness:
-                        log_issue(img_path, 'too_dark', mean_brightness)
-                        continue
-
-                    if max_brightness > 0 and mean_brightness > max_brightness:
-                        log_issue(img_path, 'too_bright', mean_brightness)
-                        continue
-
-                # Check blur
-                if blur_threshold > 0:
-                    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-                    if blur_score < blur_threshold:
-                        log_issue(img_path, 'blurry', blur_score)
-                        continue
+                        log_issue(img_path, 'solidColor')
 
         except Exception as e:
-            log_issue(img_path, 'corrupted', 0.0)
-            continue
+            # Check corruption image
+            log_issue(img_path, 'corrupted')
 
     total_issues = len(report_dict['filepaths'])
     print('\n--- Summary ---')
-    print(f"Total issues found: {total_issues}")
+    print(f'Total issues found: {total_issues}')
 
     return report_dict
 
-# หา Hash สำหรับภาพแต่ละภาพ
-# Source library: https://github.com/idealo/imagededup
 def find_hasher(data_dir, output_path=None, extensions=('.jpg', '.jpeg', '.png')):
+    """
+        Source library: https://github.com/idealo/imagededup
+        สำหรับหา pHash ของภาพแต่ละภาพ โดยใช้ phasher จาก Imagededup Library
+    """
     phasher = PHash()
     hashes_dict = {}
     target_folders = []
@@ -202,12 +159,12 @@ def find_duplicates(hashes_dict):
 
     print(f'\nFound {total_images} images in total.')
 
-    # ภาพซ้ำกันภายใน Class เดียวกัน
+    # ภาพซ้ำกันภายใน Class เดียวกัน (Intra Duplicate)
     intra_report = {
         'filepaths': [], 'filename': [], 'label': [], 'issue': [], 'hash_group': [], 'keep': []
     }
 
-    # ภาพซ้ำกันระหว่าง Class
+    # ภาพซ้ำกันระหว่าง Class (Inter Duplicate)
     inter_report = {
         'filepaths': [], 'filename': [], 'label': [], 'issue': [], 'hash_group': [], 'conflicting_labels': []
     }
@@ -219,38 +176,42 @@ def find_duplicates(hashes_dict):
 
         labels_found = set(item['label'] for item in file_list)
         if len(labels_found) == 1:
-            # ภาพซ้ำกันภายใน Class เดียวกัน
+            # ภาพซ้ำกันภายใน Class เดียวกัน (Intra Duplicate)
             sorted_files = sorted(file_list, key=lambda x: x['full_path'])
 
             for i, item in enumerate(sorted_files):
                 intra_report['filepaths'].append(item['full_path'])
                 intra_report['filename'].append(os.path.basename(item['full_path']))
                 intra_report['label'].append(item['label'])
-                intra_report['issue'].append('intra_duplicate')
+                intra_report['issue'].append('intraDuplicate')
                 intra_report['hash_group'].append(hash_val)
-                intra_report['keep'].append(True if i == 0 else False)
+                intra_report['keep'].append(True if i == 0 else False) # เลือกเก็บ Index แรกเสมอ (ที่เหลือเป็น Copy ของต้นฉบับ)
         else:
-            # ภาพซ้ำกันระหว่าง Class
+            # ภาพซ้ำกันระหว่าง Class (Inter Duplicate)
+            # ต้องไป Verify ต่อว่าภาพไหนคือ Class ที่ถูกต้องจริง ๆ
             conflicting_str = ", ".join(sorted(list(labels_found)))
 
             for i, item in enumerate(file_list):
                 inter_report['filepaths'].append(item['full_path'])
                 inter_report['filename'].append(os.path.basename(item['full_path']))
                 inter_report['label'].append(item['label'])
-                inter_report['issue'].append('inter_duplicate')
+                inter_report['issue'].append('interDuplicate')
                 inter_report['hash_group'].append(hash_val)
                 inter_report['conflicting_labels'].append(conflicting_str)
 
     return intra_report, inter_report
 
-# Source library: https://github.com/idealo/imagededup
-def find_outliers(data_dir, seed=42, contamination=0.05, extensions=('.jpg', '.jpeg', '.png')):
+def find_outliers(data_dir, seed, contamination=0.05, extensions=('.jpg', '.jpeg', '.png')):
     """
-        เป็นการ Check outlier โดยพิจารณาจาก Vector ที่ได้จาก CNN Encoder และนำ Vector ที่ได้ผ่านเข้าไปใน IsolationForest อีกที
-        โดยเป็น CNN จาก imagededup library ซึ่งเป็นการตรวจสอบ Outlier ภายใน Class หรือ Label นั้น ๆ เท่านั้น ดูว่าภายใน Class
-        เดียวกันภาพนั้นต่างจากพวกหรือไม่
+        Library: https://github.com/idealo/imagededup
+        IsolationForest: https://doi.org/10.1145/2133360.2133363
+        MobileNetV3: https://arxiv.org/abs/1905.02244
+
+        เป็นการ Check outlier โดยพิจารณาจาก Vector ที่ได้จาก CNN Encoder และนำ Vector ที่ได้ส่งผ่านเข้าไปใน IsolationForest อีกที
+        ซึ่งโมเดล CNN ที่ใช้เป็นโมเดลจาก imagededup library เป็นการตรวจสอบ Outlier ภายใน Class เดียวกันเท่านั้น ดูว่าภายใน Class
+        เดียวกันมีภาพที่แตกต่างจากพวกหรือไม่
     """
-    cnn = CNN() # MobileNetV3 จาก imagededup
+    cnn = CNN() # MobileNetV3 ค่า Default จาก imagededup
     report_dict = {
         'filepaths': [],
         'filename': [],
@@ -274,26 +235,32 @@ def find_outliers(data_dir, seed=42, contamination=0.05, extensions=('.jpg', '.j
             encodings = cnn.encode_images(image_dir=folder_path)
             filenames = list(encodings.keys())
             vectors = np.array(list(encodings.values()))
+            vectors_norm = normalize(vectors, norm='l2')
 
-            clf = IsolationForest(contamination=contamination, random_state=seed, n_jobs=-1)
-            clf.fit(vectors)
+            clf = IsolationForest(
+                contamination=contamination,
+                n_estimators=200,
+                random_state=seed,
+                n_jobs=-1)
 
-            preds = clf.predict(vectors)
-            scores = clf.decision_function(vectors)
+            clf.fit(vectors_norm)
+            preds = clf.predict(vectors_norm)
+            scores = clf.decision_function(vectors_norm)
 
             for i, pred in enumerate(preds):
+                # เลือกเฉพาะคะแนนติดลบ
                 if pred == -1:
                     full_path = os.path.join(folder_path, filenames[i])
 
                     report_dict['filepaths'].append(full_path)
                     report_dict['filename'].append(filenames[i])
                     report_dict['label'].append(label_name)
-                    report_dict['issue'].append('outlier')
+                    report_dict['issue'].append('candidateOutlier')
                     report_dict['score'].append(scores[i])
 
-            print(f"Class {label_name}: Found {list(preds).count(-1)} outliers.")
+            print(f'Class {label_name}: Found {list(preds).count(-1)} candidate outlier.')
         except Exception as e:
-            print(f"Error processing folder {folder_path}: {e}")
+            print(f'Error processing folder {folder_path}: {e}')
 
     return report_dict
 
@@ -320,7 +287,7 @@ def export_duplicates_images(df, filepaths_col, filename_col, label_col, hash_gr
     if issue_type not in valid_modes:
         raise ValueError(f"Mode must be one of {valid_modes}, but got '{issue_type}'")
 
-    mode_folder_name = f"{issue_type}_duplicate"
+    mode_folder_name = f"{issue_type}Duplicate"
     base_target_dir = os.path.join(output_base_dir, mode_folder_name)
     os.makedirs(base_target_dir, exist_ok=True)
 
@@ -355,7 +322,6 @@ def prepare_transform(df, transform_dict, filepaths_col, label_col, target_size=
 
     sample = df.sample(1).iloc[0]
     orig_path = sample[filepaths_col]
-    orig_class = sample[label_col]
 
     orig_img_pil = Image.open(orig_path).convert('RGB').resize(target_size)
 
