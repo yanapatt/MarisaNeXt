@@ -21,6 +21,7 @@ from sklearn.preprocessing import label_binarize
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
+import torch
 from torchvision.transforms import v2
 
 # ตั้งค่า Font display
@@ -122,7 +123,7 @@ def plot_confusion_matrix(cm, class_names=None, norm=False, cmap=plt.cm.Blues, t
         cm = cm / row_sum
 
     suffix = ' ' + '(Normalized)' if norm else ''
-    plot_title = f'{title}\nConfusion Matrix{suffix}' if title else f'Confusion Matrix{suffix}'
+    plot_title = f'{title} - Confusion Matrix{suffix}' if title else f'Confusion Matrix{suffix}'
 
     plt.figure(figsize=figsize)
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
@@ -221,7 +222,7 @@ def plot_roc_auc_curve(y_true, y_pred_probs, class_names=None, task='multiclass'
     ax_main.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--', alpha=0.7)
 
     if title:
-        plot_title = f'{title}\nReceiver Operating Characteristic (ROC)'
+        plot_title = f'{title} - Receiver Operating Characteristic (ROC)'
     else:
         plot_title = 'Receiver Operating Characteristic (ROC)'
 
@@ -315,8 +316,9 @@ def preprocess_input(img_path, mean, std, target_size):
     return raw_img, img_tensor
 
 def plot_grad_cam(model, conv_layers, df, filepaths_col, true_label_col, true_idx,
-                  probs_col, mean, std, target_size=(224, 224), figsize=(20, 5),
-                  fontsize=16, title=None, save_path=None):
+                  probs_col, mean, std, target_size=(224, 224),
+                  img_base_size=4, row_one_title=True,
+                  fontsize=14, save_path=None):
 
     '''
         Ref: https://github.com/jacobgil/pytorch-grad-cam
@@ -324,13 +326,20 @@ def plot_grad_cam(model, conv_layers, df, filepaths_col, true_label_col, true_id
     cam = GradCAM(model=model, target_layers=conv_layers)
     num_imgs = len(df)
 
-    fig, axes = plt.subplots(nrows=2, ncols=num_imgs, figsize=figsize)
+    aspect_ratio = target_size[1] / target_size[0]
+
+    fig_height = img_base_size * 2
+    fig_width = (img_base_size * aspect_ratio) * num_imgs
+    fig, axes = plt.subplots(nrows=2, ncols=num_imgs,
+                             figsize=(fig_width, fig_height),
+                             gridspec_kw={'wspace': 0.02, 'hspace': 0.02,
+                                          'top': 0.95, 'bottom': 0.05,
+                                          'left': 0.02, 'right': 0.98})
 
     if num_imgs == 1:
-        axes = axes.reshape(2, 1)
-
-    if title:
-        fig.suptitle(title, fontsize=fontsize + 4, y=0.92)
+        axes = np.array([[axes[0]], [axes[1]]])
+    elif num_imgs > 1 and len(axes.shape) == 1:
+        axes = axes.reshape(2, num_imgs)
 
     model.eval()
 
@@ -340,25 +349,29 @@ def plot_grad_cam(model, conv_layers, df, filepaths_col, true_label_col, true_id
         true_label_idx = int(row[true_idx])
         prob = row[probs_col]
 
+        # Preprocess
         raw_img, img_tensor = preprocess_input(img_path, mean, std, target_size)
 
+        # GradCAM
         targets = [ClassifierOutputTarget(true_label_idx)]
         grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
         grayscale_cam = grayscale_cam[0, :]
         visualization = show_cam_on_image(raw_img, grayscale_cam, use_rgb=True)
 
         # --- Row 1: Original Image ---
-        axes[0, i].imshow(raw_img)
-        axes[0, i].set_title(true_label, fontsize=fontsize)
-        axes[0, i].axis('off')
+        ax_orig = axes[0, i]
+        ax_orig.imshow(raw_img)
+        if row_one_title:
+            ax_orig.set_title(f"{true_label}", fontsize=fontsize, pad=10)
+        ax_orig.axis('off')
 
         # --- Row 2: Grad-CAM Image ---
-        axes[1, i].imshow(visualization)
-        axes[1, i].axis('off')
-        axes[1, i].set_title(f'P = {prob:.5f}', fontsize=fontsize, y=-0.2)
-
-    plt.tight_layout()
-
+        ax_cam = axes[1, i]
+        ax_cam.imshow(visualization)
+        ax_cam.axis('off')
+        ax_cam.text(0.5, -0.1, f'P = {prob:.4f}',
+                    transform=ax_cam.transAxes,
+                    ha='center', va='top', fontsize=fontsize)
     if save_path:
         plt.savefig(f'{save_path}/grad_cam.png', dpi=300, bbox_inches='tight')
         plt.savefig(f'{save_path}/grad_cam.svg', bbox_inches='tight')
