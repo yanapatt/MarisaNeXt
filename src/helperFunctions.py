@@ -302,31 +302,42 @@ def vis_preds(df, filepaths_col, true_label_col, pred_label_col, prob_col, seed,
 
     plt.show()
 
-# ใช้คู่กับ plot_grad_cam
-def preprocess_input(img_path, mean, std, target_size):
-    img = cv2.imread(img_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, target_size)
-    raw_img = np.float32(img) / 255.0
+# สำหรับ ViT หรือ Swin ใช้คู่กับ plot_grad_cam
+def reshape_transform(tensor, height=7, width=7, swin=False):
+    '''
+        Ref: https://github.com/jacobgil/pytorch-grad-cam/blob/master/tutorials/vision_transformers.md
 
-    img_tensor = v2.ToImage()(img)
-    img_tensor = v2.ToDtype(torch.float32, scale=True)(img_tensor)
-    img_tensor = v2.Normalize(mean=mean, std=std)(img_tensor)
-    img_tensor = img_tensor.unsqueeze(0)
-    return raw_img, img_tensor
+        In ViT the output of the layers are typically BATCH x 197 x 192. In the dimension with 197, the
+        first element represents the class token, and the rest represent the 14x14 patches in the image.
+        We can treat the last 196 elements as a 14x14 spatial image, with 192 channels.
 
-def plot_grad_cam(model, conv_layers, df, filepaths_col, true_label_col, true_idx,
-                  probs_col, mean, std, target_size=(224, 224),
-                  img_base_size=4, row_one_title=True,
-                  fontsize=14, save_path=None):
+        In Swin transformer base the output of the layers are typically BATCH x 49 x 1024. We can treat
+        the last 49 elements as a 7x7 spatial image, with 1024 channels.
+    '''
+    if tensor.dim() == 4:
+        if tensor.size(-1) > tensor.size(2):
+             return tensor.permute(0, 3, 1, 2)
+        return tensor
+
+    if swin:
+        result = tensor.reshape(tensor.size(0), height, width, tensor.size(2))
+    else:
+        result = tensor[:, 1 :  , :].reshape(tensor.size(0), height, width, tensor.size(2))
+
+    # Bring the channels to the first dimension,
+    # like in CNNs.
+    result = result.transpose(2, 3).transpose(1, 2)
+    return result
+
+def plot_grad_cam(model, target_layers, df, filepaths_col, true_label_col, true_idx,
+                  probs_col, device, transform, reshape_transform=None, img_size=(224, 224),
+                  img_base_size=4, row_one_title=True, fontsize=14, save_path=None):
 
     '''
         Ref: https://github.com/jacobgil/pytorch-grad-cam
     '''
-    cam = GradCAM(model=model, target_layers=conv_layers)
     num_imgs = len(df)
-
-    aspect_ratio = target_size[1] / target_size[0]
+    aspect_ratio = img_size[1] / img_size[0]
 
     fig_height = img_base_size * 2
     fig_width = (img_base_size * aspect_ratio) * num_imgs
@@ -341,37 +352,54 @@ def plot_grad_cam(model, conv_layers, df, filepaths_col, true_label_col, true_id
     elif num_imgs > 1 and len(axes.shape) == 1:
         axes = axes.reshape(2, num_imgs)
 
-    model.eval()
+    with GradCAM(model=model, target_layers=target_layers, reshape_transform=reshape_transform) as cam:
+        for i, (idx, row) in enumerate(df.iterrows()):
+            img_path = row[filepaths_col]
+            true_label = row[true_label_col]
+            true_label_idx = int(row[true_idx])
+            prob = row[probs_col]
 
-    for i, (idx, row) in enumerate(df.iterrows()):
-        img_path = row[filepaths_col]
-        true_label = row[true_label_col]
-        true_label_idx = int(row[true_idx])
-        prob = row[probs_col]
+            # Load image
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # Preprocess
-        raw_img, img_tensor = preprocess_input(img_path, mean, std, target_size)
+            pil_img = Image.fromarray(img) # Convert to PIL Image
+            img_tensor = transform(pil_img) # Preprocess image for each model
 
-        # GradCAM
-        targets = [ClassifierOutputTarget(true_label_idx)]
-        grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
-        grayscale_cam = grayscale_cam[0, :]
-        visualization = show_cam_on_image(raw_img, grayscale_cam, use_rgb=True)
+            if img_tensor.dim() == 3:
+                img_tensor = img_tensor.unsqueeze(0)
 
-        # --- Row 1: Original Image ---
-        ax_orig = axes[0, i]
-        ax_orig.imshow(raw_img)
-        if row_one_title:
-            ax_orig.set_title(f"{true_label}", fontsize=fontsize, pad=10)
-        ax_orig.axis('off')
+            img_tensor = img_tensor.to(device)
+            targets = [ClassifierOutputTarget(true_label_idx)]
 
-        # --- Row 2: Grad-CAM Image ---
-        ax_cam = axes[1, i]
-        ax_cam.imshow(visualization)
-        ax_cam.axis('off')
-        ax_cam.text(0.5, -0.1, f'P = {prob:.4f}',
-                    transform=ax_cam.transAxes,
-                    ha='center', va='top', fontsize=fontsize)
+            grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
+            grayscale_cam = grayscale_cam[0, :]
+
+            cam_h, cam_w = grayscale_cam.shape # Get size from gracyscale_cam has been preprocess by transform.
+            overlay_img = cv2.resize(img, (cam_w, cam_h))
+            overlay_img = np.float32(overlay_img) / 255.0
+
+            visualization = show_cam_on_image(overlay_img, grayscale_cam, use_rgb=True)
+
+            # Final image size to display only
+            img_display = cv2.resize(overlay_img, img_size)
+            vis_display = cv2.resize(visualization, img_size)
+
+            # --- Row 1: Original Image ---
+            ax_orig = axes[0, i]
+            ax_orig.imshow(img_display)
+            if row_one_title:
+                ax_orig.set_title(f"{true_label}", fontsize=fontsize, pad=10)
+            ax_orig.axis('off')
+
+            # --- Row 2: Grad-CAM Image ---
+            ax_cam = axes[1, i]
+            ax_cam.imshow(vis_display)
+            ax_cam.axis('off')
+            ax_cam.text(0.5, -0.1, f'P = {prob:.4f}',
+                        transform=ax_cam.transAxes,
+                        ha='center', va='top', fontsize=fontsize)
+
     if save_path:
         plt.savefig(f'{save_path}/grad_cam.png', dpi=300, bbox_inches='tight')
         plt.savefig(f'{save_path}/grad_cam.svg', bbox_inches='tight')
