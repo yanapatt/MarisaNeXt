@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as font_manager
 import itertools
 import pathlib
-import os
 from PIL import Image
 import cv2
 import numpy as np
@@ -21,8 +20,6 @@ from sklearn.preprocessing import label_binarize
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
-import torch
-from torchvision.transforms import v2
 
 # ตั้งค่า Font display
 def matplotlib_font(font_dir, prefer_name=None):

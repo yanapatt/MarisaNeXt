@@ -12,9 +12,7 @@ import pathlib
 import shutil
 import tempfile
 import numpy as np
-import pandas as pd
 from PIL import Image, ImageFile
-import cv2
 import pickle
 from tqdm import tqdm
 import torch
