@@ -20,6 +20,7 @@ from sklearn.preprocessing import label_binarize
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
+import torch
 
 # ตั้งค่า Font display
 def matplotlib_font(font_dir, prefer_name=None):
@@ -327,12 +328,13 @@ def reshape_transform(tensor, height=7, width=7, swin=False):
     return result
 
 def plot_grad_cam(model, target_layers, df, filepaths_col, true_label_col, true_idx,
-                  probs_col, device, transform, reshape_transform=None, img_size=(224, 224),
+                  device, transform, task='multiclass', reshape_transform=None, img_size=(224, 224),
                   img_base_size=4, row_one_title=True, fontsize=14, save_path=None):
 
     '''
         Ref: https://github.com/jacobgil/pytorch-grad-cam
     '''
+    model.eval()
     num_imgs = len(df)
     aspect_ratio = img_size[1] / img_size[0]
 
@@ -354,7 +356,6 @@ def plot_grad_cam(model, target_layers, df, filepaths_col, true_label_col, true_
             img_path = row[filepaths_col]
             true_label = row[true_label_col]
             true_label_idx = int(row[true_idx])
-            prob = row[probs_col]
 
             # Load image
             img = cv2.imread(img_path)
@@ -367,6 +368,19 @@ def plot_grad_cam(model, target_layers, df, filepaths_col, true_label_col, true_
                 img_tensor = img_tensor.unsqueeze(0)
 
             img_tensor = img_tensor.to(device)
+
+            with torch.inference_mode():
+                outputs = model(img_tensor)
+                if task == 'multiclass':
+                    probs = torch.softmax(outputs, dim=1)
+                    prob = probs[0, true_label_idx].item()
+                else:
+                    probs = torch.sigmoid(outputs)
+                    if probs.ndim > 1:
+                        probs = probs.view(-1)
+                    p_pos = probs[0].item()
+                    prob = p_pos if true_label_idx == 1 else (1.0 - p_pos)
+
             targets = [ClassifierOutputTarget(true_label_idx)]
 
             grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
