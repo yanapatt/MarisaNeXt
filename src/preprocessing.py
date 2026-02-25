@@ -9,43 +9,26 @@ Original file is located at
 
 import os
 import pathlib
-import shutil
-import tempfile
 import numpy as np
 from PIL import Image, ImageFile
 import pickle
 from tqdm import tqdm
-import torch
-from torchvision.transforms import v2
 from imagededup.methods import PHash, CNN
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import normalize
 from collections import defaultdict
 
-# อ่าน Folder ภาพออกมาเป็น filepaths และ labels
-def read_images(data_dir, extensions=('.jpg', '.jpeg', '.png')):
-    filepaths = []
-    labels = []
-
-    data_dir = pathlib.Path(data_dir)
-    all_files = [p for p in data_dir.rglob('*') if p.suffix.lower() in extensions]
-
-    for img_path in sorted(all_files):
-        filepaths.append(str(img_path))
-        labels.append(img_path.parent.name)
-
-    return filepaths, labels
-
-# สร้าง directory ออกเป็น train, valid และ test
-def to_directory(filepaths, labels, dest_dir):
-    for filepath, label in tqdm(zip(filepaths, labels), total=len(filepaths), desc=f'Copying to {os.path.basename(dest_dir)}'):
-        label_dir = os.path.join(dest_dir, label)
-        os.makedirs(label_dir, exist_ok=True)
-
-        save_path = os.path.join(label_dir, os.path.basename(filepath))
-        shutil.copy2(filepath, save_path)
-
 def verify_images(data_dir, check_solid=True):
+    """
+        For verify images in exists directory
+            1. Check solid color image
+            2. Check corrupted image
+        Args:
+            - data_dir: The exists images directory
+            - check_solid: bool default (True)
+        Return:
+            - report_dict: dict
+    """
     ImageFile.LOAD_TRUNCATED_IMAGES = False
     report_dict = {
         'filepaths': [],
@@ -103,8 +86,14 @@ def verify_images(data_dir, check_solid=True):
 
 def find_hasher(data_dir, output_path=None, extensions=('.jpg', '.jpeg', '.png')):
     """
-        Source library: https://github.com/idealo/imagededup
-        สำหรับหา pHash ของภาพแต่ละภาพ โดยใช้ phasher จาก Imagededup Library
+        Modify from: https://github.com/idealo/imagededup
+        Find pHash for each image by phasher from Imagededup Library
+        Args:
+            - data_dir: The exists images directory
+            - output_path: The exists destination path default (None)
+            - extensions: tuple default (('.jpg', '.jpeg', '.png'))
+        Return:
+            - hashes_dict: dict
     """
     phasher = PHash()
     hashes_dict = {}
@@ -142,8 +131,15 @@ def find_hasher(data_dir, output_path=None, extensions=('.jpg', '.jpeg', '.png')
 
     return hashes_dict
 
-# ตรวจสอบ Duplicates ทั้งภายใน Class และภายนอก Class สำหรับทุก Class ใน Dataset
 def find_duplicates(hashes_dict):
+    """
+        Find duplicate images by phasher
+        Args:
+            - hashes_dict: dict
+        Return:
+            - intra_report: dict
+            - inter_report: dict
+    """
     reverse_index = defaultdict(list)
     total_images = 0
 
@@ -157,24 +153,24 @@ def find_duplicates(hashes_dict):
 
     print(f'\nFound {total_images} images in total.')
 
-    # ภาพซ้ำกันภายใน Class เดียวกัน (Intra Duplicate)
+    # Duplicate images within the same class. (Intra Duplicate)
     intra_report = {
         'filepaths': [], 'filename': [], 'label': [], 'issue': [], 'hash_group': [], 'keep': []
     }
 
-    # ภาพซ้ำกันระหว่าง Class (Inter Duplicate)
+    # Duplicate images between classes. (Inter Duplicate)
     inter_report = {
         'filepaths': [], 'filename': [], 'label': [], 'issue': [], 'hash_group': [], 'conflicting_labels': []
     }
 
     for hash_val, file_list in reverse_index.items():
-        # ถ้าไม่ซ้ำ คือเจอไฟล์แค่ไฟล์เดียว
+        # Not found duplicate image
         if len(file_list) < 2:
             continue
 
         labels_found = set(item['label'] for item in file_list)
         if len(labels_found) == 1:
-            # ภาพซ้ำกันภายใน Class เดียวกัน (Intra Duplicate)
+            # (Intra Duplicate)
             sorted_files = sorted(file_list, key=lambda x: x['full_path'])
 
             for i, item in enumerate(sorted_files):
@@ -183,10 +179,10 @@ def find_duplicates(hashes_dict):
                 intra_report['label'].append(item['label'])
                 intra_report['issue'].append('intraDuplicate')
                 intra_report['hash_group'].append(hash_val)
-                intra_report['keep'].append(True if i == 0 else False) # เลือกเก็บ Index แรกเสมอ (ที่เหลือเป็น Copy ของต้นฉบับ)
+                intra_report['keep'].append(True if i == 0 else False) # Keep First Index (otherwise duplicate)
         else:
-            # ภาพซ้ำกันระหว่าง Class (Inter Duplicate)
-            # ต้องไป Verify ต่อว่าภาพไหนคือ Class ที่ถูกต้องจริง ๆ
+            # (Inter Duplicate)
+            # Need verify again!
             conflicting_str = ", ".join(sorted(list(labels_found)))
 
             for i, item in enumerate(file_list):
@@ -199,17 +195,20 @@ def find_duplicates(hashes_dict):
 
     return intra_report, inter_report
 
-def find_outliers(data_dir, seed, contamination=0.05, extensions=('.jpg', '.jpeg', '.png')):
+def find_outliers(data_dir, seed=42, contamination=0.05, extensions=('.jpg', '.jpeg', '.png')):
     """
-        Library: https://github.com/idealo/imagededup
-        IsolationForest: https://doi.org/10.1145/2133360.2133363
-        MobileNetV3: https://arxiv.org/abs/1905.02244
+        Modify from: https://github.com/idealo/imagededup
+        IsolationForest Paper: https://doi.org/10.1145/2133360.2133363
+        MobileNetV3 Paper: https://arxiv.org/abs/1905.02244
 
-        เป็นการ Check outlier โดยพิจารณาจาก Vector ที่ได้จาก CNN Encoder และนำ Vector ที่ได้ส่งผ่านเข้าไปใน IsolationForest อีกที
-        ซึ่งโมเดล CNN ที่ใช้เป็นโมเดลจาก imagededup library เป็นการตรวจสอบ Outlier ภายใน Class เดียวกันเท่านั้น ดูว่าภายใน Class
-        เดียวกันมีภาพที่แตกต่างจากพวกหรือไม่
+        This is an outlier checking process that considers the vector obtained from the CNN encoder and then passes the obtained vector into the IsolationForest.
+        The CNN model used is from the imagededup library and checks for outliers only within the same class, seeing if there are any images within the same class that are different from the others.
+        Args:
+            - data_dir: The exists images directory
+            - seed: int for random state default (42)
+            - contamination: float default (0.05)
     """
-    cnn = CNN() # MobileNetV3 ค่า Default จาก imagededup
+    cnn = CNN() # MobileNetV3 Default From imagededup library
     report_dict = {
         'filepaths': [],
         'filename': [],
@@ -237,7 +236,7 @@ def find_outliers(data_dir, seed, contamination=0.05, extensions=('.jpg', '.jpeg
 
             clf = IsolationForest(
                 contamination=contamination,
-                n_estimators=200,
+                n_estimators=200, # Fixed n_estimators at 200
                 random_state=seed,
                 n_jobs=-1)
 
@@ -246,7 +245,7 @@ def find_outliers(data_dir, seed, contamination=0.05, extensions=('.jpg', '.jpeg
             scores = clf.decision_function(vectors_norm)
 
             for i, pred in enumerate(preds):
-                # เลือกเฉพาะคะแนนติดลบ
+                # Negative Score
                 if pred == -1:
                     full_path = os.path.join(folder_path, filenames[i])
 
@@ -261,95 +260,3 @@ def find_outliers(data_dir, seed, contamination=0.05, extensions=('.jpg', '.jpeg
             print(f'Error processing folder {folder_path}: {e}')
 
     return report_dict
-
-def export_bad_images(df, filepaths_col, filename_col, label_col, issue_col, output_base_dir):
-    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Exporting"):
-        src_path = row[filepaths_col]
-        filename = row[filename_col]
-        label = row[label_col]
-        issue = str(row[issue_col])
-
-        target_dir = os.path.join(output_base_dir, issue, label)
-        os.makedirs(target_dir, exist_ok=True)
-
-        final_filename = filename
-        target_path = os.path.join(target_dir, final_filename)
-
-        shutil.copy2(src_path, target_path)
-
-    print(f'\nExport completed to: {output_base_dir}')
-
-def export_duplicates_images(df, filepaths_col, filename_col, label_col, hash_group_col,
-                             output_base_dir, issue_type='intra'):
-    valid_modes = ['intra', 'inter']
-    if issue_type not in valid_modes:
-        raise ValueError(f"Mode must be one of {valid_modes}, but got '{issue_type}'")
-
-    mode_folder_name = f"{issue_type}Duplicate"
-    base_target_dir = os.path.join(output_base_dir, mode_folder_name)
-    os.makedirs(base_target_dir, exist_ok=True)
-
-    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc=f"Exporting {issue_type}"):
-        src_path = row[filepaths_col]
-        filename = row[filename_col]
-        label = row[label_col]
-        hash_val = str(row[hash_group_col])
-
-        if issue_type == 'intra':
-            target_dir = os.path.join(base_target_dir, label, hash_val)
-            final_filename = filename
-
-        elif issue_type == 'inter':
-            target_dir = os.path.join(base_target_dir, hash_val)
-            final_filename = f"{label}_{filename}"
-
-        os.makedirs(target_dir, exist_ok=True)
-        target_path = os.path.join(target_dir, final_filename)
-
-        shutil.copy2(src_path, target_path)
-
-    print(f'\nExport completed to: {output_base_dir}')
-
-# สำหรับเตรียม transfrom sample ในรูปแบบ dict{(key_transform : torchvision.transform....)}
-def prepare_transform(df, transform_dict, filepaths_col, label_col, target_size=(224, 224), temp_dir_path=None):
-    if temp_dir_path is None:
-        temp_dir = tempfile.mkdtemp()
-    else:
-        temp_dir = temp_dir_path
-        os.makedirs(temp_dir, exist_ok=True)
-
-    sample = df.sample(1).iloc[0]
-    orig_path = sample[filepaths_col]
-
-    orig_img_pil = Image.open(orig_path).convert('RGB').resize(target_size)
-
-    to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
-    to_pil = v2.ToPILImage()
-
-    img_tensor = to_tensor(orig_img_pil)
-
-    data_list = []
-
-    save_name_orig = '00_original.jpg'
-    save_path_orig = os.path.join(temp_dir, save_name_orig)
-    orig_img_pil.save(save_path_orig)
-
-    data_list.append({
-        filepaths_col: save_path_orig,
-        label_col: 'Original image'
-    })
-
-    for idx, (name, transform) in enumerate(transform_dict.items()):
-        transformed_tensor = transform(img_tensor)
-        transformed_pil = to_pil(transformed_tensor.clamp(0, 1))
-
-        save_name = f"{idx+1:02d}_{name.replace(' ', '_')}.jpg"
-        save_path = os.path.join(temp_dir, save_name)
-        transformed_pil.save(save_path)
-
-        data_list.append({
-            filepaths_col: save_path,
-            label_col: name
-        })
-
-    return data_list, temp_dir

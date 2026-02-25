@@ -7,39 +7,26 @@ Original file is located at
     https://colab.research.google.com/drive/1gJ15Kc555prWwyKBRbjbM5mrohw8xPKd
 """
 
-import os
 import torch
+import os
 import numpy as np
-import random as rd
+from typing import Literal
 
-# สำหรับ Setting seed environment
-def seed_everything(seed_num):
-    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-    os.environ['PYTHONHASHSEED']=str(seed_num)
-    rd.seed(seed_num)
-    np.random.seed(seed_num)
-    torch.manual_seed(seed_num)
-    torch.cuda.manual_seed(seed_num)
-    torch.cuda.manual_seed_all(seed_num)
+def get_labels(dataloader):
+    true_labels = []
+    with torch.inference_mode():
+        for batch in dataloader:
+            if isinstance(batch, (list, tuple)):
+                labels = batch[1]
+            else:
+                raise ValueError('Loader format not supported. Expected (inputs, labels).')
 
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark=False
-        torch.backends.cudnn.deterministic=True
-        torch.use_deterministic_algorithms(True)
+            if labels.ndim > 1:
+                labels = labels.view(-1)
 
-    print(f'Global seed has been set at {seed_num}')
+            true_labels.append(labels.detach().cpu().numpy())
+    return np.concatenate(true_labels)
 
-def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    rd.seed(worker_seed)
-
-def get_generator(seed_num):
-    g = torch.Generator()
-    g.manual_seed(seed_num)
-    return g
-
-# สำหรับ Save และ Load Model กลับมาใช้ใหม่
 def save_model(save_path, model, optimizer, epoch, **kwargs):
     model_to_save = model.module if hasattr(model, 'module') else model
 
@@ -52,14 +39,13 @@ def save_model(save_path, model, optimizer, epoch, **kwargs):
     checkpoint.update(kwargs)
     torch.save(checkpoint, save_path)
 
-def load_model(save_path, model, optimizer=None, device='cpu', strict=True):
+def load_model(save_path, model, optimizer, device='cpu', strict=True):
     if not os.path.exists(save_path):
         raise FileNotFoundError(f'Checkpoint not found at {save_path}')
 
     checkpoint = torch.load(save_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
 
-    # กรณีที่ต้องการแค่ load model ไป predict เฉย ๆ
     if optimizer and 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
@@ -70,19 +56,51 @@ def load_model(save_path, model, optimizer=None, device='cpu', strict=True):
 
     return checkpoint
 
-# ดึง Label จาก dataloader
-def get_labels(dataloader):
-    true_labels = []
+class ModelCheckpoint:
+    def __init__(self,
+                 save_path: str,
+                 monitor: str = 'val_loss',
+                 mode: Literal['min', 'max'] = 'min',
+                 min_delta: float = 0.0
+                 ) -> None:
+        self.save_path = save_path
+        self.monitor = monitor
+        self.mode = mode
+        self.min_delta = min_delta
 
-    for batch in dataloader:
-        if isinstance(batch, (list, tuple)):
-            labels = batch[1]
+        self.best_epoch = 0
+
+        if mode == 'min':
+            self.best_score = float('inf')
+        elif mode == 'max':
+            self.best_score = float('-inf')
         else:
-            raise ValueError('Loader format not supported')
+            raise ValueError('mode must be "min" or "max"')
 
-        if labels.ndim > 1:
-            labels = labels.view(-1)
+    def _is_improved(self, current):
+        if self.mode == 'min':
+            return current < self.best_score - self.min_delta
+        else:
+            # mode == 'max'
+            return current > self.best_score + self.min_delta
 
-        true_labels.append(labels.detach().cpu().numpy())
+    def on_epoch_end(self, model, optimizer, epoch, logs):
+        current = logs.get(self.monitor)
+        if current is None:
+            raise ValueError(f'Monitor {self.monitor} not found in logs')
 
-    return np.concatenate(true_labels)
+        if self._is_improved(current):
+            print(f'[Logs] Epoch: {epoch + 1} {self.monitor} improved from {self.best_score:.4f} to {current:.4f}, saving model to {self.save_path}')
+            self.best_score = current
+            self.best_epoch = epoch + 1
+
+            save_model(
+                save_path=self.save_path,
+                model=model,
+                epoch=epoch + 1,
+                optimizer=optimizer,
+                monitor=self.monitor,
+                best_score=self.best_score
+            )
+        else:
+            print(f'[Logs] Epoch: {epoch + 1} {self.monitor} did not improve from {self.best_score:.4f}')
