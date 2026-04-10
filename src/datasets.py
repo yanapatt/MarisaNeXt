@@ -1,0 +1,84 @@
+# -*- coding: utf-8 -*-
+"""datasets.ipynb
+
+Original file is located at
+    https://colab.research.google.com/drive/12EQSXVnL19DuSf1nv4vfrd2AyiNeDwGp
+"""
+
+import os
+import numpy as np
+import torch
+import torchvision
+
+class Datasets:
+    def __init__(self, dataset_dir: str, train_transform, transform, dataloader_kwargs: dict):
+        """
+            This class is used to manage the dataset.
+            Dataset directory tree
+
+            dataset
+            |_remain
+                |_class1
+                    |_img1.jpg
+                    |_img2.jpg
+                    |_...
+            |_test
+                |_class1
+                    |_img1.jpg
+                    |_img2.jpg
+                    |_...
+
+            Initial Args:
+                dataset_dir: (str) basepath to the dataset directory
+                train_transform: (torchvision.transforms) transform for the training dataset
+                transform: (torchvision.transforms) transform for the validation and test dataset
+                dataloader_kwargs: (dict) keyword arguments for the dataloader
+        """
+
+        self.dataset_dir = dataset_dir
+        self.train_transform = train_transform
+        self.transform = transform
+        self.dataloader_kwargs = dataloader_kwargs
+
+        self._setup_datasets()
+        self._extract_metadata()
+
+    def _setup_datasets(self):
+        remain_dir = os.path.join(self.dataset_dir, 'remain')
+        test_dir = os.path.join(self.dataset_dir, 'test')
+
+        self.train_dataset = torchvision.datasets.ImageFolder(remain_dir, transform=self.train_transform)
+        self.val_dataset = torchvision.datasets.ImageFolder(remain_dir, transform=self.transform)
+        self.test_dataset = torchvision.datasets.ImageFolder(test_dir, transform=self.transform)
+
+    def _extract_metadata(self):
+        self.classes_name = self.train_dataset.classes
+        self.class_to_idx = self.train_dataset.class_to_idx
+        self.idx_to_class = {idx: cls_name for cls_name, idx in self.class_to_idx.items()}
+        self.all_classes = np.array(self.train_dataset.targets)
+
+    def get_metadata(self) -> dict:
+        return {
+            'classes_name': self.classes_name,
+            'class_to_idx': self.class_to_idx,
+            'idx_to_class': self.idx_to_class,
+            'all_classes': self.all_classes
+        }
+
+    def get_test_loader(self) -> torch.utils.data.DataLoader:
+        return torch.utils.data.DataLoader(
+            self.test_dataset,
+            shuffle=False,
+            **self.dataloader_kwargs
+        )
+
+    def print_summary(self):
+        print(f"{'-'*50}")
+        print(f"Dataset Summary")
+        print(f"{'-'*50}")
+        print(f"Class names       : {self.classes_name}")
+        print(f"Class to Index    : {self.class_to_idx}")
+        print(f"Index to Class    : {self.idx_to_class}")
+        print(f"Total remain data : {len(self.all_classes)}")
+        print(f"Total test data   : {len(self.test_dataset)}")
+        print(f"{'-'*50}")
