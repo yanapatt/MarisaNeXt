@@ -1,5 +1,11 @@
 ﻿# [MarisaNeXt: Mushroom Accurate Recognition via Integrated Simple Attention based on ConvNeXt](#)
 
+## Environments Setup
+All experiments in this study were conducted within the Google Colab environment, utilizing an NVIDIA L4 Tensor Core GPU (22.5 GB VRAM) and 53.0 GB of systemRAM. The experimental framework was implemented using Python 3.12.12 and PyTorch 2.10.0. To accelerate convergence, models were initialized with ImageNet-1K pre-trained weights via the PyTorch Image Models (timm) library and fully fine-tuned. Input images were resized and normalized per architectural requirements. Training employed stratified 5-fold cross-validation for 30 epochs per fold. We utilized the AdamW optimizer with a cosine annealing scheduler. Finally, Cross-Entropy Loss served as the objective function for the multi-class classification.
+
+## The dataset preprocessing results
+The datasets, preprocessed according to the proposed pipeline, are publicly available in the following Google Drive repository: https://drive.google.com/drive/folders/15NtysMa3CPtmNT8KnrfneCKyO490Llrq?usp=sharing
+
 ## Performance results of the ablation study on the test set with Soft-voting ensemble
 <table>
   <thead>
