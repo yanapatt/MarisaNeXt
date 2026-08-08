@@ -138,11 +138,6 @@
       <td>1.8026</td><td>56.9235</td><td>554.8174</td><td>0.0516</td><td>0.9900</td><td>0.9890</td><td>0.9900</td><td>0.9884</td><td><a href="./notebooks/MushroomB/ConvNeXt_Tiny_224_MushroomB_R1_V1.ipynb">Link</a></td>
     </tr>
     <tr>
-      <td>ConvNeXtV2-T</td><td>32</td><td>224×224</td><td>8.9357</td><td>4.4548</td><td>27.9</td>
-      <td>2.7397</td><td>86.4968</td><td>365.0030</td><td>0.0975</td><td>0.9698</td><td>0.9673</td><td>0.9715</td><td>0.9634</td><td><a href="./notebooks/MushroomA/ConvNeXtV2_Tiny_224_MushroomA_R1_V1.ipynb">Link</a></td>
-      <td>2.6463</td><td>83.5670</td><td>377.8916</td><td>0.0517</td><td>0.9917</td><td>0.9910</td><td>0.9915</td><td>0.9910</td><td><a href="./notebooks/MushroomB/ConvNeXtV2_Tiny_224_MushroomB_R1_V1.ipynb">Link</a></td>
-    </tr>
-    <tr>
       <td>InceptionNeXt-T</td><td>32</td><td>224×224</td><td>8.4013</td><td>4.1864</td><td>25.8</td>
       <td>1.4138</td><td>44.6346</td><td>707.3308</td><td>0.1137</td><td>0.9646</td><td>0.9654</td><td>0.9705</td><td>0.9606</td><td><a href="./notebooks/MushroomA/InceptionNeXt_Tiny_224_MushroomA_R1_V1.ipynb">Link</a></td>
       <td>1.4211</td><td>44.8778</td><td>703.6657</td><td>0.0564</td><td>0.9867</td><td>0.9861</td><td>0.9869</td><td>0.9858</td><td><a href="./notebooks/MushroomB/InceptionNeXt_Tiny_224_MushroomB_R1_V1.ipynb">Link</a></td>
